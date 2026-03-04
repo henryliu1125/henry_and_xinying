@@ -1,0 +1,594 @@
+---
+title: "Untitled"
+format: html
+---
+
+# Load and clean data
+
+## Loading data
+
+```{python}
+from pathlib import Path
+import pandas as pd
+import geopandas as gpd
+import altair as alt
+import json
+
+# Set data path
+DATA_DIR = Path("../data/derived-data")
+
+# Crime
+crime_raw = pd.read_csv(DATA_DIR / "Crimes_-_2001_to_Present_20260304.csv")
+print("Crime loaded:", crime_raw.shape)
+
+# Education
+edu_raw = pd.read_csv(DATA_DIR / "ACSDT5Y2024.B15003-Data.csv")
+print("Education loaded:", edu_raw.shape)
+
+# Unemployment rate
+unemp_raw = pd.read_csv(DATA_DIR / "ACSST5Y2024.S2301-Data.csv")
+print("Unemployment loaded:", unemp_raw.shape)
+
+# Income
+income_raw = pd.read_csv(DATA_DIR / "ACSDT5Y2024.B19013-Data.csv")
+print("Income loaded:", income_raw.shape)
+
+# Tract shapefile
+tract_raw = gpd.read_file(DATA_DIR / "tl_2023_17_tract" / "tl_2023_17_tract.shp")
+print("Tract loaded:", tract_raw.shape)
+```
+
+## Cleaning data
+
+### Cleaning crime data
+
+```{python}
+# Clean crime data
+crime = crime_raw[[
+    "Date",
+    "Primary Type",
+    "Year",
+    "Latitude",
+    "Longitude"
+]].copy()
+crime_raw.head()
+```
+
+### Cleaning education data
+
+```{python}
+# Remove the first row (metadata row)
+edu = edu_raw.iloc[3:][[
+    "GEO_ID",
+    "B15003_001E",
+    "B15003_021E",
+    "B15003_022E",
+    "B15003_023E",
+    "B15003_024E"
+]].copy()
+
+# Extract tract_id
+edu["tract_id"] = edu["GEO_ID"].str[-11:]
+
+# Convert to numeric
+cols = [
+    "B15003_001E",
+    "B15003_021E",
+    "B15003_022E",
+    "B15003_023E",
+    "B15003_024E"
+]
+
+edu[cols] = edu[cols].apply(pd.to_numeric, errors="coerce")
+
+# Bachelor+ population
+edu["bachelor_plus"] = (
+    edu["B15003_021E"] +
+    edu["B15003_022E"] +
+    edu["B15003_023E"] +
+    edu["B15003_024E"]
+)
+
+# Bachelor+ rate
+edu["edu_rate"] = edu["bachelor_plus"] / edu["B15003_001E"]
+
+# Keep only needed columns
+edu = edu[["tract_id", "edu_rate"]]
+
+print("Education cleaned:", edu.shape)
+display("Education table:", edu.head())
+```
+
+### Cleaning unemployment data
+
+```{python}
+# Clean unemployment data
+unemp = unemp_raw.iloc[3:][[
+    "GEO_ID",
+    "S2301_C04_001E"
+]].copy()
+
+# Extract tract id
+unemp["tract_id"] = unemp["GEO_ID"].str[-11:]
+
+# Convert to numeric
+unemp["S2301_C04_001E"] = pd.to_numeric(
+    unemp["S2301_C04_001E"],
+    errors="coerce"
+)
+
+# Rename column
+unemp = unemp.rename(
+    columns={"S2301_C04_001E": "unemployment_rate"}
+)
+
+# Keep final columns
+unemp = unemp[[
+    "tract_id",
+    "unemployment_rate"
+]]
+
+print("Unemployment cleaned:", unemp.shape)
+display("Unemployment table:", unemp.head())
+```
+
+### Cleaning income data
+
+```{python}
+# Clean income data
+income = income_raw.iloc[3:][[
+    "GEO_ID",
+    "B19013_001E"
+]].copy()
+
+# Extract tract id
+income["tract_id"] = income["GEO_ID"].str[-11:]
+
+# Convert to numeric
+income["B19013_001E"] = pd.to_numeric(
+    income["B19013_001E"],
+    errors="coerce"
+)
+
+# Rename column
+income = income.rename(
+    columns={"B19013_001E": "median_income"}
+)
+
+# Keep final columns
+income = income[[
+    "tract_id",
+    "median_income"
+]]
+
+print("Income cleaned:", income.shape)
+display("Income table:", income.head())
+```
+
+## Subset data for only Chicago tracts
+
+### Tracts Geodata: keep only Chicago tract IDs
+
+```{python}
+# Load tract and Chicago boundary shapefiles 
+tracts = gpd.read_file(DATA_DIR / "tl_2023_17_tract" / "tl_2023_17_tract.shp")
+chicago = gpd.read_file(DATA_DIR / "Boundaries - City_20260303" / "geo_export_06d21f1c-6fda-4eae-9de6-a54e6cd59005.shp")
+
+# Align CRS
+chicago = chicago.to_crs(tracts.crs)
+
+# Keep tracts that intersect Chicago boundary (without cutting geometry)
+tracts_chi = gpd.sjoin(
+    tracts,
+    chicago[["geometry"]],
+    how="inner",
+    predicate="intersects"
+).drop(columns=["index_right"])
+
+# Ensure tract id format
+tracts_chi["GEOID"] = tracts_chi["GEOID"].astype(str).str.zfill(11)
+
+# Chicago tract id set
+chi_tract_ids = set(tracts_chi["GEOID"])
+print(f"Total tracts in Chicago: {len(chi_tract_ids)}")
+```
+
+### Crime Geodata (keep only Chicago crime data)
+
+```{python}
+# Make crime GeoDataFrame (Chicago only)
+crime_geo = crime.dropna(subset=["Latitude", "Longitude"]).copy()
+
+crime_gdf = gpd.GeoDataFrame(
+    crime_geo,
+    geometry=gpd.points_from_xy(crime_geo["Longitude"], crime_geo["Latitude"]),
+    crs="EPSG:4326"
+)
+
+tracts_chi_4326 = tracts_chi.to_crs("EPSG:4326")
+
+crime_tract = gpd.sjoin(
+    crime_gdf,
+    tracts_chi_4326[["GEOID", "geometry"]],
+    how="inner",
+    predicate="within"
+).rename(columns={"GEOID": "tract_id"})
+
+crime_tract["tract_id"] = crime_tract["tract_id"].astype(str).str.zfill(11)
+
+crime_tract.head()
+```
+
+# Part 1: Crime counts amoung tracts and income
+
+## Relationship: Crime counts and Tracts
+
+```{python}
+# Count crimes per tract
+crime_counts = (
+    crime_tract.groupby("tract_id")
+    .size()
+    .reset_index(name="crime_count")
+)
+
+# Merge counts onto Chicago tracts
+tracts_plot = tracts_chi.to_crs("EPSG:4326").copy()
+tracts_plot = tracts_plot.rename(columns={"GEOID": "tract_id"})
+tracts_plot["tract_id"] = tracts_plot["tract_id"].astype(str).str.zfill(11)
+
+tracts_plot = tracts_plot.merge(crime_counts, on="tract_id", how="left")
+tracts_plot["crime_count"] = tracts_plot["crime_count"].fillna(0).astype(int)
+
+# Convert to GeoJSON-like dict for Altair
+geojson_dict = json.loads(tracts_plot.to_json())
+```
+
+```{python}
+# Choropleth of Crime counts
+choropleth = (
+    alt.Chart(
+        alt.InlineData(
+            values=geojson_dict,
+            format=alt.DataFormat(type="json", property="features")
+        )
+    )
+    .mark_geoshape(stroke="white", strokeWidth=0.2)
+    .encode(
+        color=alt.Color(
+            "properties.crime_count:Q",
+            title="Crime count",
+            scale=alt.Scale(scheme="oranges", domainMin=0)
+        ),
+        tooltip=[
+            alt.Tooltip("properties.tract_id:N", title="Tract"),
+            alt.Tooltip("properties.crime_count:Q", title="Crime count"),
+        ]
+    )
+    .properties(
+        width=350,
+        height=350,
+        title="Chicago Crime Count by Census Tract (2019–2023)"
+    )
+    .project(type="mercator")
+)
+
+choropleth
+```
+
+## Relationship: Crime counts and Income
+
+```{python}
+# Subset data
+tract_stats = (
+    crime_counts
+    .merge(income, on="tract_id", how="inner")
+    .dropna(subset=["median_hh_income"])
+    .copy()
+)
+
+# make sure numeric
+tract_stats["median_hh_income"] = pd.to_numeric(tract_stats["median_hh_income"], errors="coerce")
+tract_stats["crime_count"] = pd.to_numeric(tract_stats["crime_count"], errors="coerce")
+tract_stats = tract_stats.dropna(subset=["median_hh_income", "crime_count"])
+```
+
+```{python}
+# Draw the scatterpoint plot
+brush = alt.selection_interval()
+
+# points
+points = (
+    alt.Chart(tract_stats)
+    .mark_circle(size=20, opacity=0.5)
+    .encode(
+        x=alt.X("median_hh_income:Q", title="Median household income (ACS 5-year, USD)"),
+        y=alt.Y("crime_count:Q", title="Crime count (2019–2023)"),
+        tooltip=[
+            alt.Tooltip("tract_id:N", title="Tract"),
+            alt.Tooltip("median_hh_income:Q", title="Income", format=",.0f"),
+            alt.Tooltip("crime_count:Q", title="Crime count"),
+        ],
+        color=alt.condition(brush, alt.value("orange"), alt.value("lightgray"))
+    )
+    .add_params(brush)
+    .properties(width=350, height=250, title="Crime vs Income by Census Tract")
+)
+
+# regression line
+line = (
+    alt.Chart(tract_stats)
+    .transform_regression("median_hh_income", "crime_count", method="linear")
+    .mark_line(color="red", size=2)
+    .encode(
+        x="median_hh_income:Q",
+        y="crime_count:Q",
+    )
+)
+
+# combine
+scatter = (
+    (points + line)
+    .properties(
+        width=350,
+        height=250,
+        title="Crime vs Income by Census Tract"
+    )
+)
+
+scatter
+```
+
+# Part 2: LIHTC low-income unit counts and Tracts
+
+## Relationship: LIHTC pis / alloc and Tracts 
+
+```{python}
+lihtc_pis["tract_id"].value_counts()
+
+
+lihtc_pis_counts = (
+    lihtc_pis
+    .groupby("tract_id", as_index=False)
+    .agg(li_units_total=("li_units", "sum"))
+)
+
+lihtc_alloc_counts = (
+    lihtc_alloc
+    .groupby("tract_id", as_index=False)
+    .agg(li_units_total=("li_units", "sum"))
+)
+
+tracts_plot = tracts_chi.to_crs("EPSG:4326").copy()
+tracts_plot = tracts_plot.rename(columns={"GEOID": "tract_id"})
+tracts_plot["tract_id"] = tracts_plot["tract_id"].astype(str).str.zfill(11)
+
+tracts_pis = tracts_plot.merge(lihtc_pis_counts, on="tract_id", how="left")
+tracts_pis["li_units_total"] = tracts_pis["li_units_total"].fillna(0)
+
+tracts_alloc = tracts_plot.merge(lihtc_alloc_counts, on="tract_id", how="left")
+tracts_alloc["li_units_total"] = tracts_alloc["li_units_total"].fillna(0)
+
+geojson_pis = json.loads(tracts_pis.to_json())
+geojson_alloc = json.loads(tracts_alloc.to_json())
+```
+
+```{python}
+map = (
+    alt.Chart(
+        alt.InlineData(
+            values=geojson_pis,
+            format=alt.DataFormat(type="json", property="features")
+        )
+    )
+    .mark_geoshape(stroke="white", strokeWidth=0.2)
+    .encode(
+        color=alt.Color(
+            "properties.li_units_total:Q",
+            title="LIHTC units (PIS)",
+            scale=alt.Scale(scheme="blues", domainMin=0)
+        ),
+        tooltip=[
+            alt.Tooltip("properties.tract_id:N", title="Tract"),
+            alt.Tooltip("properties.li_units_total:Q", title="LIHTC units")
+        ]
+    )
+    .properties(
+        width=350,
+        height=350,
+        title="LIHTC Units Placed in Service (2019–2023)"
+    )
+    .project(type="mercator")
+)
+
+map_pis = (
+    alt.Chart(
+        alt.InlineData(
+            values=geojson_pis,
+            format=alt.DataFormat(type="json", property="features")
+        )
+    )
+    .mark_geoshape(stroke="white", strokeWidth=0.2)
+    .encode(
+        color=alt.Color(
+            "properties.li_units_total:Q",
+            title="LIHTC units (PIS)",
+            scale=alt.Scale(scheme="blues", domainMin=0)
+        ),
+        tooltip=[
+            alt.Tooltip("properties.tract_id:N", title="Tract"),
+            alt.Tooltip("properties.li_units_total:Q", title="LIHTC units")
+        ]
+    )
+    .properties(
+        width=350,
+        height=350,
+        title="LIHTC Units Placed in Service (2019–2023)"
+    )
+    .project(type="mercator")
+)
+
+map_alloc = (
+    alt.Chart(
+        alt.InlineData(
+            values=geojson_alloc,
+            format=alt.DataFormat(type="json", property="features")
+        )
+    )
+    .mark_geoshape(stroke="white", strokeWidth=0.2)
+    .encode(
+        color=alt.Color(
+            "properties.li_units_total:Q",
+            title="LIHTC units (Alloc)",
+            scale=alt.Scale(scheme="blues", domainMin=0)
+        ),
+        tooltip=[
+            alt.Tooltip("properties.tract_id:N", title="Tract"),
+            alt.Tooltip("properties.li_units_total:Q", title="LIHTC units")
+        ]
+    )
+    .properties(
+        width=350,
+        height=350,
+        title="LIHTC Units Allocated (2019–2023)"
+    )
+    .project(type="mercator")
+)
+
+map_pis | map_alloc
+
+lihtc_pis["tract_id"].isin(chi_tract_ids).sum()
+```
+
+```{python}
+import pandas as pd
+import geopandas as gpd
+import altair as alt
+import json
+
+# 1) Load affordable rental housing CSV
+aff = pd.read_csv("data/Affordable_Rental_Housing_Developments_20260303.csv")
+
+# clean units + keep rows with coords
+aff["Units"] = pd.to_numeric(aff["Units"], errors="coerce").fillna(0)
+aff = aff.dropna(subset=["Latitude", "Longitude"]).copy()
+
+# 2) Make points GeoDataFrame (EPSG:4326)
+aff_gdf = gpd.GeoDataFrame(
+    aff,
+    geometry=gpd.points_from_xy(aff["Longitude"], aff["Latitude"]),
+    crs="EPSG:4326",
+)
+
+# 3) Prepare Chicago tracts in same CRS + ensure tract_id
+tracts_plot = tracts_chi.to_crs("EPSG:4326").copy()
+tracts_plot = tracts_plot.rename(columns={"GEOID": "tract_id"})
+tracts_plot["tract_id"] = tracts_plot["tract_id"].astype(str).str.zfill(11)
+
+# 4) Spatial join: assign each affordable development point to a tract
+# (predicate="within" usually works; if you get too many unmatched, try "intersects")
+joined = gpd.sjoin(
+    aff_gdf,
+    tracts_plot[["tract_id", "geometry"]],
+    how="left",
+    predicate="within"
+)
+
+# 5) Aggregate total Units by tract
+units_by_tract = (
+    joined.dropna(subset=["tract_id"])
+    .groupby("tract_id", as_index=False)["Units"]
+    .sum()
+    .rename(columns={"Units": "aff_units_total"})
+)
+
+# 6) Merge back to tracts for mapping
+tracts_units = tracts_plot.merge(units_by_tract, on="tract_id", how="left")
+tracts_units["aff_units_total"] = tracts_units["aff_units_total"].fillna(0)
+
+# 7) Altair choropleth (0 = white, then blue gradient)
+geojson_dict = json.loads(tracts_units.to_json())
+
+base = (
+    alt.Chart(
+        alt.InlineData(values=geojson_dict,
+                       format=alt.DataFormat(type="json", property="features"))
+    )
+    .mark_geoshape(fill="transparent", stroke="lightgray", strokeWidth=0.3)
+    .properties(width=380, height=380)
+    .project(type="mercator")
+)
+
+heatmap = (
+    alt.Chart(
+        alt.InlineData(values=geojson_dict,
+                       format=alt.DataFormat(type="json", property="features"))
+    )
+    .mark_geoshape(stroke="white", strokeWidth=0.2)
+    .encode(
+        color=alt.Color(
+            "properties.aff_units_total:Q",
+            title="Affordable units (total)",
+            scale=alt.Scale(
+                domainMin=0,
+                range=["#ffffff", "#deebf7", "#9ecae1", "#3182bd", "#08519c"]
+            )
+        ),
+        tooltip=[
+            alt.Tooltip("properties.tract_id:N", title="Tract"),
+            alt.Tooltip("properties.aff_units_total:Q", title="Units")
+        ]
+    )
+    .properties(title="Affordable Rental Housing Units by Census Tract (Chicago)")
+    .project(type="mercator")
+)
+
+(base + heatmap)
+```
+
+```{python}
+tract_analysis = (
+    tracts_units[["tract_id", "aff_units_total"]]
+    .merge(crime_counts, on="tract_id", how="left")
+)
+
+tract_analysis["crime_count"] = tract_analysis["crime_count"].fillna(0)
+
+scatter = (
+    alt.Chart(tract_analysis)
+    .mark_circle(size=40, opacity=0.6)
+    .encode(
+        x=alt.X(
+            "aff_units_total:Q",
+            title="Affordable Housing Units"
+        ),
+        y=alt.Y(
+            "crime_count:Q",
+            title="Crime Count (2019–2023)"
+        ),
+        tooltip=[
+            alt.Tooltip("tract_id:N", title="Tract"),
+            alt.Tooltip("aff_units_total:Q", title="Affordable units"),
+            alt.Tooltip("crime_count:Q", title="Crime count")
+        ]
+    )
+    .properties(
+        width=400,
+        height=350,
+        title="Crime vs Affordable Housing Units by Census Tract"
+    )
+)
+
+trend = (
+    alt.Chart(tract_analysis)
+    .transform_regression("aff_units_total", "crime_count")
+    .mark_line()
+    .encode(
+        x=alt.X("aff_units_total:Q"),
+        y=alt.Y("crime_count:Q")
+    )
+)
+
+scatter + trend
+
+crime_raw.columns
+```
