@@ -1,11 +1,22 @@
 ---
-title: "Untitled"
-format: html
+title: "Final Project of Group 42"
+author: "Xinying Jiang & Henry Liu"
+format:
+  pdf:
+    include-in-header:
+      text: |
+        % Enable wrapping for Pandoc code blocks in PDF
+        \usepackage{fvextra}
+        \usepackage{float}
+        \usepackage{makecell}
+        \usepackage{booktabs}
+        \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+editor: source
+execute-dir: project
+execute:
+    echo: true
+jupyter: python3
 ---
-
-# Load and clean data
-
-## Loading data
 
 ```{python}
 from pathlib import Path
@@ -14,6 +25,43 @@ import geopandas as gpd
 import altair as alt
 import json
 
+import warnings
+warnings.filterwarnings('ignore')
+alt.renderers.enable("png")
+alt.data_transformers.disable_max_rows()
+
+data_path = 'data/external'
+
+# improve graph Resolution
+import tempfile
+from IPython.display import SVG, display, Image
+import vl_convert as vlc
+
+def display_altair_png(chart, scale=2):
+    """
+    Render an Altair chart to a PNG and display it inline.
+
+    Parameters
+    ----------
+    chart : altair.Chart
+        Altair chart object to render.
+    scale : int, optional
+        Resolution scaling factor for the PNG (default = 2). Use scale=2 for standard slides. Use scale = 3-4 for dense figures or PDF exports.
+    """
+    png_bytes = vlc.vegalite_to_png(chart.to_dict(), scale=scale)
+
+    # Write to a temporary PNG file and display
+    with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+        tmp.write(png_bytes)
+        tmp.flush()
+        display(Image(filename=tmp.name))
+```
+
+# Part 0: Load and clean data
+
+## Loading data
+
+```{python}
 # Set data path
 DATA_DIR = Path("../data/derived-data")
 
@@ -33,6 +81,11 @@ print("Unemployment loaded:", unemp_raw.shape)
 income_raw = pd.read_csv(DATA_DIR / "ACSDT5Y2024.B19013-Data.csv")
 print("Income loaded:", income_raw.shape)
 
+# Population
+pop_raw = pd.read_csv(DATA_DIR / "ACSDT5Y2024.B01003-Data.csv")
+print("Population loaded:", pop_raw.shape)
+pop_raw.head()
+
 # Tract shapefile
 tract_raw = gpd.read_file(DATA_DIR / "tl_2023_17_tract" / "tl_2023_17_tract.shp")
 print("Tract loaded:", tract_raw.shape)
@@ -51,7 +104,66 @@ crime = crime_raw[[
     "Latitude",
     "Longitude"
 ]].copy()
-crime_raw.head()
+
+# Set 31 "Primary Type" to 4 types
+violent = {
+    "HOMICIDE",
+    "BATTERY",
+    "ASSAULT",
+    "ROBBERY",
+    "CRIMINAL SEXUAL ASSAULT",
+    "SEX OFFENSE",
+    "KIDNAPPING",
+    "STALKING",
+    "INTIMIDATION"
+}
+
+property_crime = {
+    "THEFT",
+    "BURGLARY",
+    "MOTOR VEHICLE THEFT",
+    "CRIMINAL DAMAGE",
+    "CRIMINAL TRESPASS",
+    "ARSON",
+    "DECEPTIVE PRACTICE"
+}
+
+regulatory = {
+    "NARCOTICS",
+    "OTHER NARCOTIC VIOLATION",
+    "LIQUOR LAW VIOLATION",
+    "WEAPONS VIOLATION",
+    "CONCEALED CARRY LICENSE VIOLATION",
+    "GAMBLING",
+    "PROSTITUTION",
+    "PUBLIC INDECENCY",
+    "OBSCENITY",
+    "HUMAN TRAFFICKING"
+}
+
+other = {
+    "OTHER OFFENSE",
+    "OFFENSE INVOLVING CHILDREN",
+    "INTERFERENCE WITH PUBLIC OFFICER",
+    "PUBLIC PEACE VIOLATION",
+    "NON-CRIMINAL"
+}
+
+# Function to classify crime
+def classify_crime(x):
+    if x in violent:
+        return "Violent"
+    elif x in property_crime:
+        return "Property"
+    elif x in regulatory:
+        return "Regulatory"
+    else:
+        return "Other"
+
+# Create new column and drop "Primary Type" column
+crime["crime_type"] = crime["Primary Type"].apply(classify_crime)
+
+crime = crime.drop(columns="Primary Type")
 ```
 
 ### Cleaning education data
@@ -90,7 +202,7 @@ edu["bachelor_plus"] = (
 )
 
 # Bachelor+ rate
-edu["edu_rate"] = edu["bachelor_plus"] / edu["B15003_001E"]
+edu["edu_rate"] = 100 * edu["bachelor_plus"] / edu["B15003_001E"]
 
 # Keep only needed columns
 edu = edu[["tract_id", "edu_rate"]]
@@ -165,6 +277,39 @@ print("Income cleaned:", income.shape)
 display("Income table:", income.head())
 ```
 
+### Cleaning population data
+
+```{python}
+# Clean population data
+pop = pop_raw.iloc[3:][[
+    "GEO_ID",
+    "B01003_001E"
+]].copy()
+
+# Extract tract id
+pop["tract_id"] = pop["GEO_ID"].str[-11:]
+
+# Convert to numeric
+pop["B01003_001E"] = pd.to_numeric(
+    pop["B01003_001E"],
+    errors="coerce"
+)
+
+# Rename column
+pop = pop.rename(
+    columns={"B01003_001E": "population"}
+)
+
+# Keep final columns
+pop = pop[[
+    "tract_id",
+    "population"
+]]
+
+print("Population cleaned:", pop.shape)
+display("Population table:", pop.head())
+```
+
 ## Subset data for only Chicago tracts
 
 ### Tracts Geodata: keep only Chicago tract IDs
@@ -185,6 +330,9 @@ tracts_chi = gpd.sjoin(
     predicate="intersects"
 ).drop(columns=["index_right"])
 
+# Clip tracts to Chicago boundary
+tracts_chi = gpd.clip(tracts_chi, chicago)
+
 # Ensure tract id format
 tracts_chi["GEOID"] = tracts_chi["GEOID"].astype(str).str.zfill(11)
 
@@ -193,7 +341,7 @@ chi_tract_ids = set(tracts_chi["GEOID"])
 print(f"Total tracts in Chicago: {len(chi_tract_ids)}")
 ```
 
-### Crime Geodata (keep only Chicago crime data)
+### Crime Geodata: add tract_id column
 
 ```{python}
 # Make crime GeoDataFrame (Chicago only)
@@ -216,36 +364,217 @@ crime_tract = gpd.sjoin(
 
 crime_tract["tract_id"] = crime_tract["tract_id"].astype(str).str.zfill(11)
 
-crime_tract.head()
+print(crime_tract.shape)
+display(crime_tract.head())
 ```
 
-# Part 1: Crime counts amoung tracts and income
-
-## Relationship: Crime counts and Tracts
+### Education Geodata: keep only Chicago tracts
 
 ```{python}
-# Count crimes per tract
-crime_counts = (
-    crime_tract.groupby("tract_id")
-    .size()
-    .reset_index(name="crime_count")
+edu_gdf = tracts_chi.merge(
+    edu,
+    left_on="GEOID",
+    right_on="tract_id",
+    how="left"
 )
 
-# Merge counts onto Chicago tracts
-tracts_plot = tracts_chi.to_crs("EPSG:4326").copy()
-tracts_plot = tracts_plot.rename(columns={"GEOID": "tract_id"})
-tracts_plot["tract_id"] = tracts_plot["tract_id"].astype(str).str.zfill(11)
-
-tracts_plot = tracts_plot.merge(crime_counts, on="tract_id", how="left")
-tracts_plot["crime_count"] = tracts_plot["crime_count"].fillna(0).astype(int)
-
-# Convert to GeoJSON-like dict for Altair
-geojson_dict = json.loads(tracts_plot.to_json())
+edu_gdf.head()
 ```
 
+### Unemployment Geodata: keep only Chicago tracts
+
 ```{python}
-# Choropleth of Crime counts
-choropleth = (
+unemp_gdf = tracts_chi.merge(
+    unemp,
+    left_on="GEOID",
+    right_on="tract_id",
+    how="left"
+)
+
+unemp_gdf.head()
+```
+
+### Income Geodata: keep only Chicago tracts
+
+```{python}
+income_gdf = tracts_chi.merge(
+    income,
+    left_on="GEOID",
+    right_on="tract_id",
+    how="left"
+)
+
+income_gdf.head()
+```
+
+### Population Geodata: keep only Chicago tracts
+
+```{python}
+pop_gdf = tracts_chi.merge(
+    pop,
+    left_on="GEOID",
+    right_on="tract_id",
+    how="left"
+)
+
+pop_gdf.head()
+```
+
+## Merge Crime and ACS variables into tract GeoDataFrame
+
+```{python}
+# Aggregate crime_count by tract_id
+crime_by_tract = (
+    crime_tract
+    .groupby("tract_id", as_index=False)
+    .size()
+    .rename(columns={"size": "crime_count"})
+)
+
+# Merge crime + ACS into Chicago tracts GeoDataFrame
+tracts_analysis = (
+    tracts_chi
+    .merge(pop, left_on="GEOID", right_on="tract_id", how="left")
+    .drop(columns=["tract_id"])
+    .merge(crime_by_tract, left_on="GEOID", right_on="tract_id", how="left")
+    .drop(columns=["tract_id"])
+    .merge(edu, left_on="GEOID", right_on="tract_id", how="left").drop(columns=["tract_id"])
+    .merge(unemp, left_on="GEOID", right_on="tract_id", how="left").drop(columns=["tract_id"])
+    .merge(income, left_on="GEOID", right_on="tract_id", how="left").drop(columns=["tract_id"])
+)
+
+# Fill tracts with no crimes + compute rate (per 1000 residents)
+tracts_analysis["crime_count"] = tracts_analysis["crime_count"].fillna(0).astype(int)
+tracts_analysis["crime_rate"] = (tracts_analysis["crime_count"] / tracts_analysis["population"]) * 100
+
+tracts_analysis.head()
+```
+
+# Part 1: Crime count / rate patterns amoung Tracts
+
+## Static plot 1: Crime Count by Month and Date
+
+```{python}
+# Prepare date variables
+crime_time = crime_tract.copy()
+crime_time["Date"] = pd.to_datetime(crime_time["Date"], errors="coerce")
+
+crime_time["month"] = crime_time["Date"].dt.month
+crime_time["date"] = crime_time["Date"].dt.day
+
+# Aggregate crime count
+crime_calendar = (
+    crime_time
+    .groupby(["month", "date"], as_index=False)
+    .size()
+    .rename(columns={"size": "crime_count"})
+)
+
+# Month labels
+month_order = [
+    "Jan","Feb","Mar","Apr","May","Jun",
+    "Jul","Aug","Sep","Oct","Nov","Dec"
+]
+
+crime_calendar["month_name"] = crime_calendar["month"].apply(lambda x: month_order[x-1])
+
+# Heatmap
+calendar_heatmap = (
+    alt.Chart(crime_calendar)
+    .mark_rect()
+    .encode(
+        x=alt.X(
+            "month_name:N",
+            title="Month",
+            sort=month_order
+        ),
+        y=alt.Y(
+            "date:O",
+            title="Date"
+        ),
+        color=alt.Color(
+            "crime_count:Q",
+            title="Crime Count",
+            scale=alt.Scale(scheme="redyellowblue", reverse=True)
+        ),
+        tooltip=[
+            alt.Tooltip("month_name:N", title="Month"),
+            alt.Tooltip("date:O", title="Date"),
+            alt.Tooltip("crime_count:Q", title="Crime Count")
+        ]
+    )
+    .properties(
+        width=250,
+        height=450,
+        title="Crime Count by Month and Date"
+    )
+)
+
+calendar_heatmap
+```
+
+## Static plot 2: Crime Count by Month and Hour
+
+```{python}
+# Static plot 2: Crime count by Month and Hour
+
+crime_time = crime_tract.copy()
+crime_time["Date"] = pd.to_datetime(crime_time["Date"], errors="coerce")
+
+crime_time["month"] = crime_time["Date"].dt.month
+crime_time["hour"] = crime_time["Date"].dt.hour
+
+# Aggregate counts
+crime_month_hour = (
+    crime_time
+    .groupby(["month", "hour"], as_index=False)
+    .size()
+    .rename(columns={"size": "crime_count"})
+)
+
+# Month labels
+month_order = ["Jan","Feb","Mar","Apr","May","Jun",
+               "Jul","Aug","Sep","Oct","Nov","Dec"]
+
+crime_month_hour["month_name"] = crime_month_hour["month"].apply(lambda x: month_order[x-1])
+
+# Heatmap
+crime_hour_heatmap = (
+    alt.Chart(crime_month_hour)
+    .mark_rect()
+    .encode(
+        x=alt.X("month_name:N", title="Month", sort=month_order),
+        y=alt.Y("hour:O", title="Hour of Day"),
+        color=alt.Color(
+            "crime_count:Q",
+            title="Crime Count",
+            scale=alt.Scale(scheme="redyellowblue", reverse=True)
+        ),
+        tooltip=[
+            alt.Tooltip("month_name:N", title="Month"),
+            alt.Tooltip("hour:O", title="Hour"),
+            alt.Tooltip("crime_count:Q", title="Crime Count")
+        ]
+    )
+    .properties(
+        width=250,
+        height=450,
+        title="Crime Count by Month and Hour"
+    )
+)
+
+crime_hour_heatmap
+```
+
+## Static plot 3: Crime Count Choropleth Map
+
+```{python}
+# Crime count choropleth map (Chicago tracts)
+
+tracts_plot = tracts_analysis.to_crs("EPSG:4326").copy()
+geojson_dict = json.loads(tracts_plot.to_json())
+
+crime_count_map = (
     alt.Chart(
         alt.InlineData(
             values=geojson_dict,
@@ -256,339 +585,175 @@ choropleth = (
     .encode(
         color=alt.Color(
             "properties.crime_count:Q",
-            title="Crime count",
-            scale=alt.Scale(scheme="oranges", domainMin=0)
+            title="Crime Count",
+            scale=alt.Scale(scheme="orangered")
         ),
         tooltip=[
-            alt.Tooltip("properties.tract_id:N", title="Tract"),
+            alt.Tooltip("properties.GEOID:N", title="Tract"),
             alt.Tooltip("properties.crime_count:Q", title="Crime count"),
-        ]
-    )
-    .properties(
-        width=350,
-        height=350,
-        title="Chicago Crime Count by Census Tract (2019–2023)"
-    )
-    .project(type="mercator")
-)
-
-choropleth
-```
-
-## Relationship: Crime counts and Income
-
-```{python}
-# Subset data
-tract_stats = (
-    crime_counts
-    .merge(income, on="tract_id", how="inner")
-    .dropna(subset=["median_hh_income"])
-    .copy()
-)
-
-# make sure numeric
-tract_stats["median_hh_income"] = pd.to_numeric(tract_stats["median_hh_income"], errors="coerce")
-tract_stats["crime_count"] = pd.to_numeric(tract_stats["crime_count"], errors="coerce")
-tract_stats = tract_stats.dropna(subset=["median_hh_income", "crime_count"])
-```
-
-```{python}
-# Draw the scatterpoint plot
-brush = alt.selection_interval()
-
-# points
-points = (
-    alt.Chart(tract_stats)
-    .mark_circle(size=20, opacity=0.5)
-    .encode(
-        x=alt.X("median_hh_income:Q", title="Median household income (ACS 5-year, USD)"),
-        y=alt.Y("crime_count:Q", title="Crime count (2019–2023)"),
-        tooltip=[
-            alt.Tooltip("tract_id:N", title="Tract"),
-            alt.Tooltip("median_hh_income:Q", title="Income", format=",.0f"),
-            alt.Tooltip("crime_count:Q", title="Crime count"),
         ],
-        color=alt.condition(brush, alt.value("orange"), alt.value("lightgray"))
     )
-    .add_params(brush)
-    .properties(width=350, height=250, title="Crime vs Income by Census Tract")
-)
-
-# regression line
-line = (
-    alt.Chart(tract_stats)
-    .transform_regression("median_hh_income", "crime_count", method="linear")
-    .mark_line(color="red", size=2)
-    .encode(
-        x="median_hh_income:Q",
-        y="crime_count:Q",
-    )
-)
-
-# combine
-scatter = (
-    (points + line)
     .properties(
-        width=350,
-        height=250,
-        title="Crime vs Income by Census Tract"
+        width=400,
+        height=400,
+        title="Chicago Crime Count by Census Tract (2024)"
     )
+    .project(type="mercator")
 )
 
-scatter
+crime_count_map
 ```
 
-# Part 2: LIHTC low-income unit counts and Tracts
-
-## Relationship: LIHTC pis / alloc and Tracts 
+## Static plot 4: Crime Rate Choropleth Map
 
 ```{python}
-lihtc_pis["tract_id"].value_counts()
+# Crime rate choropleth map (per 100 residents)
 
+tracts_plot = tracts_analysis.to_crs("EPSG:4326").copy()
+geojson_dict = json.loads(tracts_plot.to_json())
 
-lihtc_pis_counts = (
-    lihtc_pis
-    .groupby("tract_id", as_index=False)
-    .agg(li_units_total=("li_units", "sum"))
-)
-
-lihtc_alloc_counts = (
-    lihtc_alloc
-    .groupby("tract_id", as_index=False)
-    .agg(li_units_total=("li_units", "sum"))
-)
-
-tracts_plot = tracts_chi.to_crs("EPSG:4326").copy()
-tracts_plot = tracts_plot.rename(columns={"GEOID": "tract_id"})
-tracts_plot["tract_id"] = tracts_plot["tract_id"].astype(str).str.zfill(11)
-
-tracts_pis = tracts_plot.merge(lihtc_pis_counts, on="tract_id", how="left")
-tracts_pis["li_units_total"] = tracts_pis["li_units_total"].fillna(0)
-
-tracts_alloc = tracts_plot.merge(lihtc_alloc_counts, on="tract_id", how="left")
-tracts_alloc["li_units_total"] = tracts_alloc["li_units_total"].fillna(0)
-
-geojson_pis = json.loads(tracts_pis.to_json())
-geojson_alloc = json.loads(tracts_alloc.to_json())
-```
-
-```{python}
-map = (
+crime_rate_map = (
     alt.Chart(
         alt.InlineData(
-            values=geojson_pis,
+            values=geojson_dict,
             format=alt.DataFormat(type="json", property="features")
         )
     )
     .mark_geoshape(stroke="white", strokeWidth=0.2)
     .encode(
         color=alt.Color(
-            "properties.li_units_total:Q",
-            title="LIHTC units (PIS)",
-            scale=alt.Scale(scheme="blues", domainMin=0)
+            "properties.crime_rate:Q",
+            title="Crime Rate (per 100 residents)",
+            scale=alt.Scale(scheme="orangered")
         ),
         tooltip=[
-            alt.Tooltip("properties.tract_id:N", title="Tract"),
-            alt.Tooltip("properties.li_units_total:Q", title="LIHTC units")
-        ]
+            alt.Tooltip("properties.GEOID:N", title="Tract"),
+            alt.Tooltip("properties.crime_count:Q", title="Crime count"),
+            alt.Tooltip("properties.population:Q", title="Population"),
+            alt.Tooltip("properties.crime_rate:Q", title="Crime rate", format=".2f"),
+        ],
     )
     .properties(
-        width=350,
-        height=350,
-        title="LIHTC Units Placed in Service (2019–2023)"
+        width=400,
+        height=400,
+        title="Chicago Crime Rate by Census Tract (2024)"
     )
     .project(type="mercator")
 )
 
-map_pis = (
-    alt.Chart(
-        alt.InlineData(
-            values=geojson_pis,
-            format=alt.DataFormat(type="json", property="features")
-        )
-    )
-    .mark_geoshape(stroke="white", strokeWidth=0.2)
-    .encode(
-        color=alt.Color(
-            "properties.li_units_total:Q",
-            title="LIHTC units (PIS)",
-            scale=alt.Scale(scheme="blues", domainMin=0)
-        ),
-        tooltip=[
-            alt.Tooltip("properties.tract_id:N", title="Tract"),
-            alt.Tooltip("properties.li_units_total:Q", title="LIHTC units")
-        ]
-    )
-    .properties(
-        width=350,
-        height=350,
-        title="LIHTC Units Placed in Service (2019–2023)"
-    )
-    .project(type="mercator")
-)
-
-map_alloc = (
-    alt.Chart(
-        alt.InlineData(
-            values=geojson_alloc,
-            format=alt.DataFormat(type="json", property="features")
-        )
-    )
-    .mark_geoshape(stroke="white", strokeWidth=0.2)
-    .encode(
-        color=alt.Color(
-            "properties.li_units_total:Q",
-            title="LIHTC units (Alloc)",
-            scale=alt.Scale(scheme="blues", domainMin=0)
-        ),
-        tooltip=[
-            alt.Tooltip("properties.tract_id:N", title="Tract"),
-            alt.Tooltip("properties.li_units_total:Q", title="LIHTC units")
-        ]
-    )
-    .properties(
-        width=350,
-        height=350,
-        title="LIHTC Units Allocated (2019–2023)"
-    )
-    .project(type="mercator")
-)
-
-map_pis | map_alloc
-
-lihtc_pis["tract_id"].isin(chi_tract_ids).sum()
+crime_rate_map
 ```
 
+# Part 2: 
+
+## Static plot 5: Crime Count by Type
+
 ```{python}
-import pandas as pd
-import geopandas as gpd
-import altair as alt
-import json
-
-# 1) Load affordable rental housing CSV
-aff = pd.read_csv("data/Affordable_Rental_Housing_Developments_20260303.csv")
-
-# clean units + keep rows with coords
-aff["Units"] = pd.to_numeric(aff["Units"], errors="coerce").fillna(0)
-aff = aff.dropna(subset=["Latitude", "Longitude"]).copy()
-
-# 2) Make points GeoDataFrame (EPSG:4326)
-aff_gdf = gpd.GeoDataFrame(
-    aff,
-    geometry=gpd.points_from_xy(aff["Longitude"], aff["Latitude"]),
-    crs="EPSG:4326",
+# Aggregate crime counts by grouped crime category
+crime_type_counts = (
+    crime_tract
+    .groupby("crime_type", as_index=False)
+    .size()
+    .rename(columns={"size": "crime_count"})
 )
 
-# 3) Prepare Chicago tracts in same CRS + ensure tract_id
-tracts_plot = tracts_chi.to_crs("EPSG:4326").copy()
-tracts_plot = tracts_plot.rename(columns={"GEOID": "tract_id"})
-tracts_plot["tract_id"] = tracts_plot["tract_id"].astype(str).str.zfill(11)
-
-# 4) Spatial join: assign each affordable development point to a tract
-# (predicate="within" usually works; if you get too many unmatched, try "intersects")
-joined = gpd.sjoin(
-    aff_gdf,
-    tracts_plot[["tract_id", "geometry"]],
-    how="left",
-    predicate="within"
-)
-
-# 5) Aggregate total Units by tract
-units_by_tract = (
-    joined.dropna(subset=["tract_id"])
-    .groupby("tract_id", as_index=False)["Units"]
-    .sum()
-    .rename(columns={"Units": "aff_units_total"})
-)
-
-# 6) Merge back to tracts for mapping
-tracts_units = tracts_plot.merge(units_by_tract, on="tract_id", how="left")
-tracts_units["aff_units_total"] = tracts_units["aff_units_total"].fillna(0)
-
-# 7) Altair choropleth (0 = white, then blue gradient)
-geojson_dict = json.loads(tracts_units.to_json())
-
-base = (
-    alt.Chart(
-        alt.InlineData(values=geojson_dict,
-                       format=alt.DataFormat(type="json", property="features"))
-    )
-    .mark_geoshape(fill="transparent", stroke="lightgray", strokeWidth=0.3)
-    .properties(width=380, height=380)
-    .project(type="mercator")
-)
-
-heatmap = (
-    alt.Chart(
-        alt.InlineData(values=geojson_dict,
-                       format=alt.DataFormat(type="json", property="features"))
-    )
-    .mark_geoshape(stroke="white", strokeWidth=0.2)
+# Create bar chart of crime counts by type
+crime_type_bar = (
+    alt.Chart(crime_type_counts)
+    .mark_bar()
     .encode(
+        x=alt.X("crime_type:N", title="Crime Category", sort="-y"),
+        y=alt.Y("crime_count:Q", title="Crime Count"),
         color=alt.Color(
-            "properties.aff_units_total:Q",
-            title="Affordable units (total)",
-            scale=alt.Scale(
-                domainMin=0,
-                range=["#ffffff", "#deebf7", "#9ecae1", "#3182bd", "#08519c"]
-            )
-        ),
-        tooltip=[
-            alt.Tooltip("properties.tract_id:N", title="Tract"),
-            alt.Tooltip("properties.aff_units_total:Q", title="Units")
-        ]
-    )
-    .properties(title="Affordable Rental Housing Units by Census Tract (Chicago)")
-    .project(type="mercator")
-)
-
-(base + heatmap)
-```
-
-```{python}
-tract_analysis = (
-    tracts_units[["tract_id", "aff_units_total"]]
-    .merge(crime_counts, on="tract_id", how="left")
-)
-
-tract_analysis["crime_count"] = tract_analysis["crime_count"].fillna(0)
-
-scatter = (
-    alt.Chart(tract_analysis)
-    .mark_circle(size=40, opacity=0.6)
-    .encode(
-        x=alt.X(
-            "aff_units_total:Q",
-            title="Affordable Housing Units"
-        ),
-        y=alt.Y(
             "crime_count:Q",
-            title="Crime Count (2019–2023)"
+            scale=alt.Scale(scheme="orangered"),
+            legend=None
         ),
         tooltip=[
-            alt.Tooltip("tract_id:N", title="Tract"),
-            alt.Tooltip("aff_units_total:Q", title="Affordable units"),
-            alt.Tooltip("crime_count:Q", title="Crime count")
+            "crime_type:N",
+            "crime_count:Q"
         ]
     )
     .properties(
         width=400,
-        height=350,
-        title="Crime vs Affordable Housing Units by Census Tract"
+        height=300,
+        title="Crime Count by Type"
     )
 )
 
-trend = (
-    alt.Chart(tract_analysis)
-    .transform_regression("aff_units_total", "crime_count")
-    .mark_line()
-    .encode(
-        x=alt.X("aff_units_total:Q"),
-        y=alt.Y("crime_count:Q")
+crime_type_bar
+```
+
+## Static plot 6: Choropleths for Education Rate
+
+```{python}
+# Set base map
+tracts_plot = tracts_analysis.to_crs("EPSG:4326").copy()
+geojson_dict = json.loads(tracts_plot.to_json())
+
+base = (
+    alt.Chart(
+        alt.InlineData(
+            values=geojson_dict,
+            format=alt.DataFormat(type="json", property="features")
+        )
     )
+    .mark_geoshape(stroke="white", strokeWidth=0.2)
+    .project(type="mercator")
+    .properties(width=450, height=450)
 )
+```
+```{python}
+# Education choropleth
+edu_map = base.encode(
+    color=alt.Color(
+        "properties.edu_rate:Q",
+        title="Education (%)",
+        scale=alt.Scale(scheme="greens", type="quantile")
+    ),
+    tooltip=[
+        alt.Tooltip("properties.GEOID:N", title="Tract"),
+        alt.Tooltip("properties.edu_rate:Q", title="Education (%)", format=".1f")
+    ]
+).properties(title="Education Rate by Tract")
 
-scatter + trend
+edu_map
+```
 
-crime_raw.columns
+## Static plot 7: Choropleths for Unemployment Rate
+
+```{python}
+# Unemployment choropleth
+unemp_map = base.encode(
+    color=alt.Color(
+        "properties.unemployment_rate:Q",
+        title="Unemployment (%)",
+        scale=alt.Scale(scheme="blues", type="quantile")
+    ),
+    tooltip=[
+        alt.Tooltip("properties.GEOID:N", title="Tract"),
+        alt.Tooltip("properties.unemployment_rate:Q", title="Unemployment (%)", format=".1f")
+    ]
+).properties(title="Unemployment Rate by Tract")
+
+unemp_map
+```
+
+## Static plot 8: Choropleths for Median Income
+
+```{python}
+# Income choropleth
+income_map = base.encode(
+    color=alt.Color(
+        "properties.median_income:Q",
+        title="Median Income (USD)",
+        scale=alt.Scale(scheme="purples", type="quantile")
+    ),
+    tooltip=[
+        alt.Tooltip("properties.GEOID:N", title="Tract"),
+        alt.Tooltip("properties.median_income:Q", title="Median Income", format=",.0f")
+    ]
+).properties(title="Median Income by Tract")
+
+income_map
 ```
