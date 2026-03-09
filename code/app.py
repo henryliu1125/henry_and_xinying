@@ -14,18 +14,14 @@ import geopandas as gpd
 import plotly.express as px
 import streamlit as st
 
-# ──────────────────────────────────────────────
 # Page config
-# ──────────────────────────────────────────────
 st.set_page_config(
     page_title="Chicago Crime Dashboard",
     page_icon="🔍",
     layout="wide",
 )
 
-# ──────────────────────────────────────────────
 # Crime classification helpers
-# ──────────────────────────────────────────────
 VIOLENT = {
     "HOMICIDE", "BATTERY", "ASSAULT", "ROBBERY",
     "CRIMINAL SEXUAL ASSAULT", "SEX OFFENSE",
@@ -49,9 +45,7 @@ def classify_crime(x):
     else:                  return "Other"
 
 
-# ──────────────────────────────────────────────
 # Data loaders (cached)
-# ──────────────────────────────────────────────
 DATA_DIR = Path("data/derived-data")
 
 @st.cache_data(show_spinner="Loading crime data...")
@@ -138,12 +132,12 @@ def assign_tracts(_crime_df, _tracts_gdf):
     return pd.DataFrame(joined.drop(columns=["geometry","index_right"], errors="ignore"))
 
 
-# ── Load all data ──────────────────────────────
+# Load all data 
 crime_raw   = load_crime()
 acs_all     = load_acs()
 tracts_chi  = load_tracts()
 
-# ── Filter ACS to Chicago tracts only ──────────
+# Filter ACS to Chicago tracts only 
 chi_tract_ids = set(tracts_chi["GEOID"].astype(str).str.zfill(11))
 acs = acs_all[acs_all["tract_id"].isin(chi_tract_ids)].copy()
 
@@ -151,17 +145,15 @@ crime_tract = assign_tracts(crime_raw, tracts_chi)
 
 available_years = sorted(crime_tract["Year"].dropna().unique().astype(int), reverse=True)
 
-# ── Fixed main title ───────────────────────────
+# Fixed main title 
 st.title("🔍 Chicago Crime Dashboard")
 
 
-# ══════════════════════════════════════════════
 # UNIFIED SIDEBAR
-# ══════════════════════════════════════════════
 with st.sidebar:
     st.markdown("## Filters")
 
-    # ── Page selector (always visible) ────────
+    # Page selector (always visible) 
     st.markdown("**Page**")
     page = st.radio(
         label="page_radio",
@@ -172,12 +164,12 @@ with st.sidebar:
 
     st.markdown("---")
 
-    # ── Year selector (always visible) ────────
+    # Year selector (always visible) 
     selected_year = st.selectbox("Year", options=available_years, index=0)
 
     st.markdown("---")
 
-    # ══ Page 1 — specific controls ════════════
+    # Page 1 — specific controls 
     if page == "Crime Distribution":
 
         month_range = st.slider(
@@ -202,7 +194,7 @@ with st.sidebar:
             st.warning("Select at least one category.")
             selected_types = ALL_TYPES
 
-    # ══ Page 2 — specific controls ════════════
+    # Page 2 — specific controls 
     else:
         factor = st.radio(
             "Socioeconomic factor",
@@ -224,13 +216,11 @@ with st.sidebar:
         use_log = st.checkbox("Log scale for crime count (y-axis)", value=False)
 
 
-# ── Filter to selected year ────────────────────
+# Filter to selected year 
 crime_year = crime_tract[crime_tract["Year"] == selected_year]
 
 
-# ══════════════════════════════════════════════
 # PAGE 1 — Map + Crime Type Bar
-# ══════════════════════════════════════════════
 if page == "Crime Distribution":
 
     st.markdown("<h2 style='font-size:1.75rem; margin-bottom:0.25rem;'>🗺️ Crime Distribution (Geographical & Temporal)</h2>", unsafe_allow_html=True)
@@ -266,7 +256,7 @@ if page == "Crime Distribution":
         .sort_values("crime_count", ascending=False)
     )
 
-    # ── Charts ────────────────────────────────
+    # Charts
     col_map, col_bar = st.columns([3, 2])
 
     with col_map:
@@ -325,7 +315,7 @@ if page == "Crime Distribution":
         fig_bar.update_traces(textposition="outside")
         st.plotly_chart(fig_bar, use_container_width=True)
 
-    # ── Summary metrics ────────────────────────
+    # Summary metrics
     st.markdown("---")
     m1, m2, m3 = st.columns(3)
     m1.metric("Total Crimes (filtered)", f"{len(filtered):,}")
@@ -334,9 +324,7 @@ if page == "Crime Distribution":
     m3.metric("Avg Crime Rate (per 100)", f"{avg_rate:.2f}")
 
 
-# ══════════════════════════════════════════════
 # PAGE 2 — Scatter: Crime vs Socioeconomic
-# ══════════════════════════════════════════════
 else:
     st.markdown("<h2 style='font-size:1.75rem; margin-bottom:0.25rem;'>📊 Socioeconomic Correlates of Crime</h2>", unsafe_allow_html=True)
 
@@ -407,7 +395,7 @@ else:
             use_container_width=True,
         )
 
-    # ── Correlation stats ──────────────────────
+    # Correlation stats 
     st.markdown("---")
     valid = scatter_df[[factor_col, "crime_count", "crime_rate"]].dropna()
     corr_count = valid[factor_col].corr(valid["crime_count"])
