@@ -1,24 +1,53 @@
 ---
-title: "Final Project of Group 42"
-author: "Xinying Jiang & Henry Liu"
 format:
+  html:
+    toc: false
+    embed-resources: true
   pdf:
     include-in-header:
       text: |
-        % Enable wrapping for Pandoc code blocks in PDF
         \usepackage{fvextra}
         \usepackage{float}
-        \usepackage{makecell}
         \usepackage{booktabs}
         \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
-editor: source
-execute-dir: project
 execute:
-    echo: true
+  echo: false
+  warning: false
+  message: false
 jupyter: python3
 ---
 
+# Chicago Crime Patterns and Socioeconomic Correlates
+
+| **Group Members** | Xinying Jiang, Henry Liu | **Lecture Section** | Section 4 | **GitHub** | xinying0301, henryliu1125 |
+|---|---|---|---|---|---|
+
+## Research Question
+
+This project aims to inform the targeting of public safety and social investment resources, identifying which neighborhoods and time periods need priority intervention. Specifically, it asks two questions: (1) What are the temporal, spatial, and categorical patterns of crime across Chicago census tracts in 2024, and (2) to what extent are neighborhood crime rates associated with socioeconomic conditions (including education attainment, unemployment, and median income)? 
+
+Data sources include the City of Chicago's crime incident dataset (filtered to 2024, with 256,652 observations) and the 2024 American Community Survey 5-Year Estimates (ACS) for socioeconomic variables.
+
+## Approach and Coding
+
+The analysis was organized in four stages. 
+
+First, \textbf{data cleaning}: The 31 original crime primary types were collapsed into four categories (Violent, Property, Regulatory, Other) using a custom classification function. ACS tables required extracting 11-digit GEOID tract codes and computing derived rates (e.g., bachelor+ rate = sum of bachelor's through doctorate holders divided by total population 25+).
+
+Second, \textbf{spatial joining}: The city boundary shapefile clipped tracts to Chicago, removing partial Cook County tracts at the city edge. A GeoPandas `sjoin` with predicate `"within"` assigned each crime location to its census tract, also subseting socioeconomic variables only within Chicago.  Crime rate was calculated as the crime count in each tract divided by the ACS population, scaled per 100 residents.
+
+Third, \textbf{static visualization}: Produce two temporal heatmaps, two choropleth maps of crime count and rate, a bar chart of crime by type, and three socioeconomic choropleth maps.
+
+Fourth, \textbf{Streamlit app}: It allows users to interactively explore crime patterns and their relationship to socioeconomic variables.
+
+**Weaknesses and difficulties encountered:**
+
+- \textbf{Temporal scope}: The crime dataset spans 2001–present but was filtered to 2024 only due to file size constraints, precluding any time-series or trend analysis across years.
+- \textbf{Spatial join precision}: An initial spatial join using `intersects` without first clipping tracts to the Chicago city boundary inadvertently included partial Cook County tracts and water bodies such as Lake Michigan. This was resolved by first clipping all Illinois tracts to the Chicago city boundary shapefile, then using a `within` predicate to assign each crime point to exactly one tract.
+- \textbf{Correlation, not causation}: The socioeconomic analysis identifies associations between tract-level conditions and crime rates but cannot establish causal relationships.
+
 ```{python}
+#| include: false
 from pathlib import Path
 import pandas as pd
 import geopandas as gpd
@@ -36,16 +65,6 @@ from IPython.display import SVG, display, Image
 import vl_convert as vlc
 
 def display_altair_png(chart, scale=2):
-    """
-    Render an Altair chart to a PNG and display it inline.
-
-    Parameters
-    ----------
-    chart : altair.Chart
-        Altair chart object to render.
-    scale : int, optional
-        Resolution scaling factor for the PNG (default = 2). Use scale=2 for standard slides. Use scale = 3-4 for dense figures or PDF exports.
-    """
     png_bytes = vlc.vegalite_to_png(chart.to_dict(), scale=scale)
 
     # Write to a temporary PNG file and display
@@ -54,13 +73,9 @@ def display_altair_png(chart, scale=2):
         tmp.flush()
         display(Image(filename=tmp.name))
 ```
-
-# Part 0: Load and clean data
-
-## Loading data
-
 ```{python}
-# Set data path
+#| include: false
+# Load data
 DATA_DIR = Path("../data")
 
 # Crime
@@ -88,12 +103,8 @@ pop_raw.head()
 tract_raw = gpd.read_file(DATA_DIR / "tl_2023_17_tract" / "tl_2023_17_tract.shp")
 print("Tract loaded:", tract_raw.shape)
 ```
-
-## Cleaning data
-
-### Cleaning crime data
-
 ```{python}
+#| include: false
 # Clean crime data
 crime = crime_raw[[
     "Date",
@@ -166,11 +177,9 @@ crime = crime.drop(columns="Primary Type")
 print("Crime cleaned:", crime.shape)
 display(crime.head())
 ```
-
-### Cleaning education data
-
 ```{python}
-# Remove the first row (metadata row)
+#| include: false
+# Clean education data
 edu = edu_raw.iloc[3:][[
     "GEO_ID",
     "B15003_001E",
@@ -211,10 +220,8 @@ edu = edu[["tract_id", "edu_rate"]]
 print("Education cleaned:", edu.shape)
 display(edu.head())
 ```
-
-### Cleaning unemployment data
-
 ```{python}
+#| include: false
 # Clean unemployment data
 unemp = unemp_raw.iloc[3:][[
     "GEO_ID",
@@ -244,10 +251,8 @@ unemp = unemp[[
 print("Unemployment cleaned:", unemp.shape)
 display(unemp.head())
 ```
-
-### Cleaning income data
-
 ```{python}
+#| include: false
 # Clean income data
 income = income_raw.iloc[3:][[
     "GEO_ID",
@@ -277,10 +282,8 @@ income = income[[
 print("Income cleaned:", income.shape)
 display(income.head())
 ```
-
-### Cleaning population data
-
 ```{python}
+#| include: false
 # Clean population data
 pop = pop_raw.iloc[3:][[
     "GEO_ID",
@@ -310,13 +313,9 @@ pop = pop[[
 print("Population cleaned:", pop.shape)
 display(pop.head())
 ```
-
-## Subset data for only Chicago tracts
-
-### Tracts Geodata: keep only Chicago tract IDs
-
 ```{python}
-# Load tract and Chicago boundary shapefiles 
+#| include: false
+# Tracts Geodata: keep only Chicago tract IDs 
 tracts = gpd.read_file(DATA_DIR / "tl_2023_17_tract" / "tl_2023_17_tract.shp")
 chicago = gpd.read_file(DATA_DIR / "Boundaries - City_20260303" / "geo_export_06d21f1c-6fda-4eae-9de6-a54e6cd59005.shp")
 
@@ -341,11 +340,9 @@ tracts_chi["GEOID"] = tracts_chi["GEOID"].astype(str).str.zfill(11)
 chi_tract_ids = set(tracts_chi["GEOID"])
 print(f"Total tracts in Chicago: {len(chi_tract_ids)}")
 ```
-
-### Crime Geodata: add tract_id column
-
 ```{python}
-# Make crime GeoDataFrame (Chicago only)
+#| include: false
+# Crime Geodata: add tract_id column
 crime_geo = crime.dropna(subset=["Latitude", "Longitude"]).copy()
 
 crime_gdf = gpd.GeoDataFrame(
@@ -368,10 +365,9 @@ crime_tract["tract_id"] = crime_tract["tract_id"].astype(str).str.zfill(11)
 print("Crime in Chicago: ", crime_tract.shape)
 display(crime_tract.head())
 ```
-
-### Education Geodata: keep only Chicago tracts
-
 ```{python}
+#| include: false
+# Education Geodata: keep only Chicago tracts
 edu_gdf = tracts_chi.merge(
     edu,
     left_on="GEOID",
@@ -381,10 +377,9 @@ edu_gdf = tracts_chi.merge(
 
 edu_gdf.head()
 ```
-
-### Unemployment Geodata: keep only Chicago tracts
-
 ```{python}
+#| include: false
+# Unemployment Geodata: keep only Chicago tracts
 unemp_gdf = tracts_chi.merge(
     unemp,
     left_on="GEOID",
@@ -394,10 +389,9 @@ unemp_gdf = tracts_chi.merge(
 
 unemp_gdf.head()
 ```
-
-### Income Geodata: keep only Chicago tracts
-
 ```{python}
+#| include: false
+# Income Geodata: keep only Chicago tracts
 income_gdf = tracts_chi.merge(
     income,
     left_on="GEOID",
@@ -407,10 +401,9 @@ income_gdf = tracts_chi.merge(
 
 income_gdf.head()
 ```
-
-### Population Geodata: keep only Chicago tracts
-
 ```{python}
+#| include: false
+# Population Geodata: keep only Chicago tracts
 pop_gdf = tracts_chi.merge(
     pop,
     left_on="GEOID",
@@ -420,11 +413,9 @@ pop_gdf = tracts_chi.merge(
 
 pop_gdf.head()
 ```
-
-## Merge Crime and ACS variables into tract GeoDataFrame
-
 ```{python}
-# Aggregate crime_count by tract_id
+#| include: false
+# Merge Crime and ACS variables into tract GeoDataFrame
 crime_by_tract = (
     crime_tract
     .groupby("tract_id", as_index=False)
@@ -451,12 +442,13 @@ tracts_analysis["crime_rate"] = (tracts_analysis["crime_count"] / tracts_analysi
 tracts_analysis.head()
 ```
 
-# Part 1: Crime count / rate patterns amoung Tracts
+**Plots 1 & 2 — Crime Count by Month/Date and Month/Hour**
 
-## Static plot 1: Crime Count by Month and Date
+The heatmaps reveal clear temporal structures. Plot 1 (Month × Date) shows higher crime in summer months and on the 1st of each month. Plot 2 (Month × Hour) shows an evening peak (6–9 PM), especially in summer. Early-morning hours (2–5 AM) are uniformly low.
 
 ```{python}
-# Prepare date variables
+#| echo: false
+# Static plot 1: Crime count by Month and Date
 crime_time = crime_tract.copy()
 crime_time["Date"] = pd.to_datetime(crime_time["Date"], errors="coerce")
 
@@ -479,7 +471,7 @@ month_order = [
 crime_calendar["month_name"] = crime_calendar["month"].apply(lambda x: month_order[x-1])
 
 # Heatmap
-calendar_heatmap = (
+month_date_heatmap = (
     alt.Chart(crime_calendar)
     .mark_rect()
     .encode(
@@ -504,18 +496,12 @@ calendar_heatmap = (
         ]
     )
     .properties(
-        width=250,
-        height=450,
+        width=120,
+        height=200,
         title="Crime Count by Month and Date"
     )
 )
 
-calendar_heatmap
-```
-
-## Static plot 2: Crime Count by Month and Hour
-
-```{python}
 # Static plot 2: Crime count by Month and Hour
 crime_time["hour"] = crime_time["Date"].dt.hour
 
@@ -531,7 +517,7 @@ crime_month_hour = (
 crime_month_hour["month_name"] = crime_month_hour["month"].apply(lambda x: month_order[x-1])
 
 # Heatmap
-crime_hour_heatmap = (
+month_hour_heatmap = (
     alt.Chart(crime_month_hour)
     .mark_rect()
     .encode(
@@ -549,169 +535,33 @@ crime_hour_heatmap = (
         ]
     )
     .properties(
-        width=250,
-        height=450,
+        width=120,
+        height=200,
         title="Crime Count by Month and Hour"
     )
 )
 
-crime_hour_heatmap
+combined = alt.hconcat(
+    month_date_heatmap,
+    month_hour_heatmap
+).resolve_scale(
+    color="independent"
+)
+
+display_altair_png(combined, scale=2)
 ```
+Following feedback from the presentation, we investigated several apparent anomalies:
 
+- \textbf{Elevated counts on the 1st of each month and at 12:00 AM / 12:00 PM}: Minute- and second-level analysis confirms these are default placeholder values, with exact 00:00:00 timestamps account for 9.70% of records on the 1st versus 3.31% on other dates, and minute=0 is similarly over-represented at hours 0 and 12.
+
+- \textbf{Low counts on January 14 and November 28}: Record counts are consistent between raw and cleaned data on both dates, suggesting the reductions are genuine and may attributable to reduced activity on federal holidays (MLK Day and Thanksgiving).
+
+- \textbf{Low count on May 14}: The raw dataset contains 728 records for May 14, but only 114 remain after cleaning. Investigation reveals that 84% of May 14 records are missing geographic coordinates (citywide average completeness is 99.4%)and May 15 is the second-worst date by the same metric. We attribute this to a likely CPD system outage on those two days that prevented coordinate recording, rather than a true drop in crime.
 ```{python}
-crime_time = crime_tract.copy()
-crime_time["Date"] = pd.to_datetime(crime_time["Date"], errors="coerce")
-crime_time["month"] = crime_time["Date"].dt.month
-crime_time["date"] = crime_time["Date"].dt.day
-crime_time["hour"] = crime_time["Date"].dt.hour
-crime_time["minute"] = crime_time["Date"].dt.minute
+#| include: false
+#| fig-align: center
 
-# 检查1号数据里，时间是否集中在整点/特定时间
-day1 = crime_time[crime_time["date"] == 1]
-print("1号数据中各小时分布：")
-print(day1["hour"].value_counts().sort_index())
-
-# 检查12:00 AM和12:00 PM的分钟数分布
-hour0_12 = crime_time[crime_time["hour"].isin([0, 12])]
-print("\n0点和12点的分钟数分布：")
-print(hour0_12["minute"].value_counts().sort_index())
-# 如果分钟数集中在0，说明是默认填入的整点
-
-# 检查5月14日前后数据
-may = crime_time[crime_time["month"] == 5]
-may_by_date = may.groupby("date").size()
-print("5月各日期犯罪数量：")
-print(may_by_date)
-
-# 检查5月14日的具体数据
-may14 = crime_time[(crime_time["month"] == 5) & (crime_time["date"] == 14)]
-print(f"\n5月14日总案件数: {len(may14)}")
-print("5月14日各小时分布：")
-print(may14["hour"].value_counts().sort_index())
-print(crime_time["Date"].max())  # 看数据的最后一条记录是什么时间
-
-# 对比1月14日各类型犯罪和前后几天
-jan = crime_time[crime_time["month"] == 1]
-jan_type = jan.groupby(["date", "crime_type"]).size().unstack(fill_value=0)
-print(jan_type.loc[12:16])  # 看12-16号
-
-# 第一步：在原始crime_raw里看5月14日有多少条
-crime_raw_check = crime_raw.copy()
-crime_raw_check["Date"] = pd.to_datetime(crime_raw_check["Date"], errors="coerce")
-may14_raw = crime_raw_check[
-    (crime_raw_check["Date"].dt.month == 5) & 
-    (crime_raw_check["Date"].dt.day == 14)
-]
-print(f"原始数据中5月14日: {len(may14_raw)} 条")
-
-# 第二步：在dropna(Latitude/Longitude)之后看
-may14_geo = may14_raw.dropna(subset=["Latitude", "Longitude"])
-print(f"去掉缺失坐标后5月14日: {len(may14_geo)} 条")
-
-# 第三步：在spatial join之后看（即crime_tract里）
-may14_tract = crime_tract[
-    (pd.to_datetime(crime_tract["Date"], errors="coerce").dt.month == 5) &
-    (pd.to_datetime(crime_tract["Date"], errors="coerce").dt.day == 14)
-]
-print(f"spatial join后5月14日: {len(may14_tract)} 条")
-
-# 检查每天缺失坐标的比例，看5月14日是否异常
-crime_raw_check["Date"] = pd.to_datetime(crime_raw_check["Date"], errors="coerce")
-crime_raw_check["month"] = crime_raw_check["Date"].dt.month
-crime_raw_check["date"] = crime_raw_check["Date"].dt.day
-crime_raw_check["has_coords"] = crime_raw_check["Latitude"].notna()
-
-# 5月各日期的坐标缺失率
-may_missing = crime_raw_check[crime_raw_check["month"] == 5].groupby("date")["has_coords"].mean()
-print("5月各日期坐标完整率：")
-print(may_missing)
-
-# 整体缺失率对比
-overall_missing = crime_raw_check["has_coords"].mean()
-print(f"\n全年整体坐标完整率: {overall_missing:.2%}")
-print(f"5月14日坐标完整率: {116/728:.2%}")
-
-# 取出5月14日缺失坐标的案件
-may14_missing = crime_raw_check[
-    (crime_raw_check["month"] == 5) & 
-    (crime_raw_check["date"] == 14) & 
-    (~crime_raw_check["has_coords"])
-]
-
-print(f"5月14日缺失坐标案件总数: {len(may14_missing)}")
-
-# 案件类型分布
-print("\n案件类型分布（Primary Type）:")
-print(may14_missing["Primary Type"].value_counts().head(20))
-
-# 时间分布
-print("\n小时分布:")
-print(may14_missing["Date"].dt.hour.value_counts().sort_index())
-
-# 如果原始数据有Description列
-if "Description" in may14_missing.columns:
-    print("\n案件描述分布（Description）:")
-    print(may14_missing["Description"].value_counts().head(20))
-
-# 如果有Block列，看地址是否集中
-if "Block" in may14_missing.columns:
-    print("\n地址分布（Block，前20）:")
-    print(may14_missing["Block"].value_counts().head(20))
-
-# 看几条原始记录
-print("\n原始数据样本（前5条）:")
-print(may14_missing.head())
-
-# 检查1月各日期坐标完整率
-jan_missing = crime_raw_check[crime_raw_check["month"] == 1].groupby("date")["has_coords"].mean()
-print("1月各日期坐标完整率：")
-print(jan_missing)
-
-jan14_total = crime_raw_check[
-    (crime_raw_check["month"] == 1) & 
-    (crime_raw_check["date"] == 14)
-]
-print(f"\n1月14日原始数据总条数: {len(jan14_total)}")
-print(f"1月14日坐标完整率: {jan14_total['has_coords'].mean():.2%}")
-
-# 所有日期坐标完整率，找出最低的前5
-all_missing = crime_raw_check.groupby(
-    ["month", "date"]
-)["has_coords"].mean().reset_index()
-all_missing.columns = ["month", "date", "completeness_rate"]
-all_missing = all_missing.sort_values("completeness_rate")
-print("坐标完整率最低的前5个日期：")
-print(all_missing.head())
-
-
-crime_raw_check["Date"] = pd.to_datetime(crime_raw_check["Date"], errors="coerce")
-crime_raw_check["month"] = crime_raw_check["Date"].dt.month
-crime_raw_check["date"] = crime_raw_check["Date"].dt.day
-crime_raw_check["hour"] = crime_raw_check["Date"].dt.hour
-crime_raw_check["minute"] = crime_raw_check["Date"].dt.minute
-crime_raw_check["second"] = crime_raw_check["Date"].dt.second
-crime_raw_check["has_coords"] = crime_raw_check["Latitude"].notna()
-
-def midnight_rate(df):
-    midnight = (df["hour"] == 0) & (df["minute"] == 0) & (df["second"] == 0)
-    return midnight.mean()
-
-day1 = crime_raw_check[crime_raw_check["date"] == 1]
-other_days = crime_raw_check[crime_raw_check["date"] != 1]
-
-print(f"1号中时间为00:00:00的占比: {midnight_rate(day1):.2%}")
-print(f"其他日期中时间为00:00:00的占比: {midnight_rate(other_days):.2%}")
-
-print("\n1号的小时分布（归一化）:")
-print((day1["hour"].value_counts(normalize=True).sort_index() * 100).round(2))
-
-print("\n其他日期的小时分布（归一化）:")
-print((other_days["hour"].value_counts(normalize=True).sort_index() * 100).round(2))
-```
-
-### Investigate anormalies shown in the plots
-
-```{python}
+# Investigate anormalies shown in the plots
 # Create a check dataframe
 crime_raw_check = crime_raw.copy()
 crime_raw_check["Date"] = pd.to_datetime(crime_raw_check["Date"], errors="coerce")
@@ -720,39 +570,41 @@ crime_raw_check["date"] = crime_raw_check["Date"].dt.day
 crime_raw_check["hour"] = crime_raw_check["Date"].dt.hour
 crime_raw_check["minute"] = crime_raw_check["Date"].dt.minute
 crime_raw_check["second"] = crime_raw_check["Date"].dt.second
-crime_raw_check["has_coords"] = (crime_raw_check["Latitude"].notna() & crime_raw_check["Longitude"].notna())
+crime_raw_check["has_coords"] = (
+    crime_raw_check["Latitude"].notna() & 
+    crime_raw_check["Longitude"].notna()
+)
 
-# 1. 日期异常检验
+# 1. Date Anomaly Checks
 
-# ── 1.1 联邦假日（1月14日 MLK Day & 11月28日 Thanksgiving）──
-for month, day, name in [(1, 14, "MLK Day"), (11, 28, "Thanksgiving")]:
+# 1.1 Jan 14 and Nov 28
+for month, day in [(1, 14), (11, 28)]:
     raw = crime_raw_check[
         (crime_raw_check["month"] == month) &
         (crime_raw_check["date"] == day)
     ]
-    # 对比前后3天的平均数量
     surrounding = crime_raw_check[
         (crime_raw_check["month"] == month) &
         (crime_raw_check["date"].isin(range(day-3, day+4))) &
         (crime_raw_check["date"] != day)
     ]
     avg_surrounding = len(surrounding) / 6
-    print(f"\n[1.1] {month}月{day}日 ({name})")
-    print(f"  Raw data 当天案件数:      {len(raw)}")
-    print(f"  Raw data 前后3天日均:     {avg_surrounding:.0f}")
-    print(f"  坐标完整率:               {raw['has_coords'].mean():.2%}")
+    print(f"\n {month}/{day}")
+    print(f"Total records on this day: {len(raw)}")
+    print(f"Avg records on surrounding 3 days: {avg_surrounding:.0f}")
+    print(f"Coordinate completeness rate: {raw['has_coords'].mean():.2%}")
 
-# ── 1.2 5月14日：坐标缺失异常 ──────────────────────────────
-print("\n[1.2] 5月14日坐标缺失分析")
+# 1.2 May 14
+print("May 14")
 may14_raw = crime_raw_check[
     (crime_raw_check["month"] == 5) &
     (crime_raw_check["date"] == 14)
 ]
-print(f"  Raw data 案件数:            {len(may14_raw)}")
-print(f"  坐标完整率:                 {may14_raw['has_coords'].mean():.2%}")
-print(f"  全年平均坐标完整率:         {crime_raw_check['has_coords'].mean():.2%}")
+print(f"\n Total records in raw data: {len(may14_raw)}")
+print(f"Coordinate completeness rate: {may14_raw['has_coords'].mean():.2%}")
+print(f"Citywide avg completeness rate: {crime_raw_check['has_coords'].mean():.2%}")
 
-# 坐标完整率最低的前5个日期
+# Bottom 5 dates by coordinate completeness
 all_completeness = (
     crime_raw_check
     .groupby(["month", "date"])["has_coords"]
@@ -761,51 +613,51 @@ all_completeness = (
     .rename(columns={"has_coords": "completeness_rate"})
     .sort_values("completeness_rate")
 )
-print("\n  坐标完整率最低的前5个日期：")
-print(all_completeness.head().to_string(index=False))
+print(f"\n Bottom 5 dates by coordinate completeness: \n {all_completeness.head().to_string(index=False)}")
 
-# 缺失坐标案件的类型分布（确认非重复案件）
+# Crime type distribution of missing-coordinate records (ruling out duplicates)
 may14_missing = may14_raw[~may14_raw["has_coords"]]
-print(f"\n  缺失坐标案件数:             {len(may14_missing)}")
-print("  缺失坐标案件类型分布：")
-print(may14_missing["Primary Type"].value_counts().head(10).to_string())
+print(f"\n  Records missing coordinates: {len(may14_missing)}")
+print(f"Crime type distribution (missing coords): \n {may14_missing["Primary Type"].value_counts().head(10).to_string()}")
 
-# ── 1.3 每月1号：默认日期验证 ──────────────────────────────
-print("\n[1.3] 每月1号默认日期验证")
-day1       = crime_raw_check[crime_raw_check["date"] == 1]
+# 1.3 1st of Each Month
+print("\n 1st of Each Month")
+day1 = crime_raw_check[crime_raw_check["date"] == 1]
 other_days = crime_raw_check[crime_raw_check["date"] != 1]
 
 midnight = lambda df: ((df["hour"]==0) & (df["minute"]==0) & (df["second"]==0)).mean()
-print(f"  1号   中 00:00:00 占比:     {midnight(day1):.2%}")
-print(f"  其他日 中 00:00:00 占比:    {midnight(other_days):.2%}")
-print(f"  1号   中 hour=0  占比:      {(day1['hour']==0).mean():.2%}")
-print(f"  其他日 中 hour=0  占比:     {(other_days['hour']==0).mean():.2%}")
+print(f"Share of 00:00:00 on the 1st: {midnight(day1):.2%}")
+print(f"Share of 00:00:00 on other days: {midnight(other_days):.2%}")
+print(f"Share of hour=0 on the 1st: {(day1['hour']==0).mean():.2%}")
+print(f"Share of hour=0 on other days: {(other_days['hour']==0).mean():.2%}")
 
-# ============================================================
-# 2. 时间异常检验
-# ============================================================
+# 2. Time Anomaly Checks
 
-# ── 2.1 0点和12点集中：默认时间验证 ───────────────────────
-print("\n[2.1] 0点和12点默认时间验证")
-h0_h12     = crime_raw_check[crime_raw_check["hour"].isin([0, 12])]
+# 2.1 Midnight & Noon Spike
+print("\n Midnight & Noon Spike")
+h0_h12 = crime_raw_check[crime_raw_check["hour"].isin([0, 12])]
 other_hours = crime_raw_check[~crime_raw_check["hour"].isin([0, 12])]
 
 exact_zero = lambda df: ((df["minute"]==0) & (df["second"]==0)).mean()
-print(f"  0点&12点 中 整点(xx:00:00) 占比:   {exact_zero(h0_h12):.2%}")
-print(f"  其他小时 中 整点(xx:00:00) 占比:   {exact_zero(other_hours):.2%}")
+print(f"Share of xx:00:00 at hour 0 & 12: {exact_zero(h0_h12):.2%}")
+print(f"Share of xx:00:00 at other hours: {exact_zero(other_hours):.2%}")
 
-# 分钟数分布对比（0点&12点 vs 其他）
-print("\n  0点&12点 分钟数分布（前5分钟）：")
+# Minute distribution comparison
+print("\n  Minute distribution at hour 0 & 12:")
 print(h0_h12["minute"].value_counts().sort_index().head(5).to_string())
-print("\n  其他小时 分钟数分布（前5分钟）：")
+print("\n  Minute distribution at other hours (first 5 minutes):")
 print(other_hours["minute"].value_counts().sort_index().head(5).to_string())
 ```
 
-## Static plot 3: Crime Count Choropleth Map
+**Plots 3 & 4 — Crime Count and Crime Rate Choropleth Maps**
+
+Plot 3 maps raw crime counts, where the Loop and Near North Side dominate due to high commercial and transit activity, making spatial variation elsewhere difficult to discern. Plot 4 adjusts for population (crime rate per 100 residents), producing a more evenly distributed and informative picture that highlights elevated risk in South and West Side tracts that would otherwise appear moderate in absolute terms.
 
 ```{python}
-# Crime count choropleth map (Chicago tracts)
+#| fig-align: center
+#| echo: false
 
+# Static plot 3: Crime Count Choropleth Map
 tracts_plot = tracts_analysis.to_crs("EPSG:4326").copy()
 geojson_dict = json.loads(tracts_plot.to_json())
 
@@ -829,21 +681,14 @@ crime_count_map = (
         ],
     )
     .properties(
-        width=300,
-        height=500,
+        width=200,
+        height=200,
         title="Chicago Crime Count by Census Tract (2024)"
     )
     .project(type="mercator")
 )
 
-crime_count_map
-```
-
-## Static plot 4: Crime Rate Choropleth Map
-
-```{python}
-# Crime rate choropleth map (per 100 residents)
-
+# Static plot 4: Crime Rate Choropleth Map
 tracts_plot = tracts_analysis.to_crs("EPSG:4326").copy()
 geojson_dict = json.loads(tracts_plot.to_json())
 
@@ -869,19 +714,29 @@ crime_rate_map = (
         ],
     )
     .properties(
-        width=300,
-        height=500,
+        width=200,
+        height=200,
         title="Chicago Crime Rate by Census Tract (2024)"
     )
     .project(type="mercator")
 )
 
-crime_rate_map
+combined = alt.hconcat(
+    crime_count_map, crime_rate_map
+).resolve_scale(
+    color="independent"
+)
+
+display_altair_png(combined, scale=2)
+#display_altair_png(crime_count_map | crime_rate_map, scale=2)
 ```
 
-## Static plot 5: Crime Count by Type
+**Plot 5 — Crime Count by Type**
+
+Property crime dominates (~140,000 incidents), followed by Violent (~80,000), Other (~22,000), and Regulatory (~18,000). The prevalence of economically motivated property crime suggests it is more likely to co-vary with income and unemployment, motivating the socioeconomic analysis in Part 2.
 
 ```{python}
+#| fig-align: center
 # Aggregate crime counts by grouped crime category
 crime_type_counts = (
     crime_tract
@@ -908,8 +763,8 @@ crime_type_bar = (
         ]
     )
     .properties(
-        width=400,
-        height=300,
+        width=200,
+        height=200,
         title="Crime Count by Type"
     )
 )
@@ -917,11 +772,12 @@ crime_type_bar = (
 crime_type_bar
 ```
 
-# Part 2: Crime and Socioeconomics Relationship
+**Plots 6, 7 & 8 — Socioeconomic Choropleth Maps**
 
-## Static plot 6: Choropleths for Education Rate
+These three maps display the spatial distribution of education rate, unemployment rate, and median income across Chicago census tracts. All three exhibit geographic patterns strikingly similar to the crime rate map (Plot 4), with socioeconomic disadvantage concentrated in the same South and West Side tracts that bear the highest crime burden,which motivates the correlation analysis in the Streamlit app.
 
 ```{python}
+#| fig-align: center
 # Set base map
 tracts_plot = tracts_analysis.to_crs("EPSG:4326").copy()
 geojson_dict = json.loads(tracts_plot.to_json())
@@ -937,8 +793,7 @@ base = (
     .project(type="mercator")
     .properties(width=350, height=450)
 )
-```
-```{python}
+
 # Education choropleth
 edu_map = base.encode(
     color=alt.Color(
@@ -952,12 +807,6 @@ edu_map = base.encode(
     ]
 ).properties(title="Education Rate by Tract")
 
-edu_map
-```
-
-## Static plot 7: Choropleths for Unemployment Rate
-
-```{python}
 # Unemployment choropleth
 unemp_map = base.encode(
     color=alt.Color(
@@ -971,12 +820,6 @@ unemp_map = base.encode(
     ]
 ).properties(title="Unemployment Rate by Tract")
 
-unemp_map
-```
-
-## Static plot 8: Choropleths for Median Income
-
-```{python}
 # Income choropleth
 income_map = base.encode(
     color=alt.Color(
@@ -990,5 +833,13 @@ income_map = base.encode(
     ]
 ).properties(title="Median Income by Tract")
 
-income_map
+combined = alt.hconcat(
+    edu_map, unemp_map, income_map
+).resolve_scale(
+    color="independent"
+)
+
+display_altair_png(combined, scale=2)
+# display_altair_png(edu_map | unemp_map | income_map, scale=2)
 ```
+
