@@ -17,7 +17,6 @@ import streamlit as st
 # Page config
 st.set_page_config(
     page_title="Chicago Crime Dashboard",
-    page_icon="🔍",
     layout="wide",
 )
 
@@ -146,7 +145,7 @@ crime_tract = assign_tracts(crime_raw, tracts_chi)
 available_years = sorted(crime_tract["Year"].dropna().unique().astype(int), reverse=True)
 
 # Fixed main title 
-st.title("🔍 Chicago Crime Dashboard")
+st.title("Chicago Crime Dashboard")
 
 
 # UNIFIED SIDEBAR
@@ -223,7 +222,7 @@ crime_year = crime_tract[crime_tract["Year"] == selected_year]
 # PAGE 1 — Map + Crime Type Bar
 if page == "Crime Distribution":
 
-    st.markdown("<h2 style='font-size:1.75rem; margin-bottom:0.25rem;'>🗺️ Crime Distribution (Geographical & Temporal)</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='font-size:1.75rem; margin-bottom:0.25rem;'> Crime Distribution (Geographical & Temporal)</h2>", unsafe_allow_html=True)
 
     # Apply time + type filters
     mask = (
@@ -326,7 +325,7 @@ if page == "Crime Distribution":
 
 # PAGE 2 — Scatter: Crime vs Socioeconomic
 else:
-    st.markdown("<h2 style='font-size:1.75rem; margin-bottom:0.25rem;'>📊 Socioeconomic Correlates of Crime</h2>", unsafe_allow_html=True)
+    st.markdown("<h2 style='font-size:1.75rem; margin-bottom:0.25rem;'> Socioeconomic Correlates of Crime</h2>", unsafe_allow_html=True)
 
     FACTOR_MAP = {
         "Education rate":    ("edu_rate",          "Education Rate (% Bachelor+)"),
