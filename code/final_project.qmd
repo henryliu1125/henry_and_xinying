@@ -10,6 +10,7 @@ format:
         \usepackage{float}
         \usepackage{booktabs}
         \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+        \usepackage[bottom=1cm]{geometry}
 execute:
   echo: false
   warning: false
@@ -828,3 +829,5 @@ The interactive dashboard is organized into two pages with a sidebar.
 **Page 1: Crime Distribution** displays a choropleth map of crime rates per 100 residents and a bar chart of crime counts by category, filterable by year, month, hour, and crime type. The South and West Side tracts bear the highest crime rates, while the Loop dominates in absolute counts due to commercial activity.
 
 **Page 2: Socioeconomic Correlates** presents scatter plots with OLS trendlines showing crime count and crime rate against a user-selected factor: education rate, unemployment rate, or median income. Tracts with greater socioeconomic disadvantage consistently show higher crime rates, corroborating the spatial patterns in Page 1.
+
+These findings suggest that public safety interventions and social investment programs would have the greatest impact if targeted at South and West Side tracts, particularly during summer months and evening hours, where both crime rates and socioeconomic disadvantage are most concentrated.

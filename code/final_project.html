@@ -7,7 +7,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
 
 
-<title>final-project</title>
+<title>final_project</title>
 <style>
 code{white-space: pre-wrap;}
 span.smallcaps{font-variant: small-caps;}
@@ -2144,7 +2144,7 @@ vertical-align: -.125em;
 
 <div id="quarto-content" class="page-columns page-rows-contents page-layout-article">
 <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
-<div class="quarto-alternate-formats"><h2>Other Formats</h2><ul><li><a href="../final-project.pdf"><i class="bi bi-file-pdf"></i>PDF</a></li></ul></div></div>
+<div class="quarto-alternate-formats"><h2>Other Formats</h2><ul><li><a href="../final_project.pdf"><i class="bi bi-file-pdf"></i>PDF</a></li></ul></div></div>
 <main class="content" id="quarto-document-content">
 
 
@@ -2174,7 +2174,7 @@ vertical-align: -.125em;
 </ul>
 <p><strong>Plots 1 &amp; 2 — Crime Count by Month/Date and Month/Hour</strong></p>
 <p>The heatmaps reveal clear temporal structures. Plot 1 shows higher crime in summer months and on the 1st of each month. Plot 2 shows an evening peak (6–9 PM), especially in summer. Early-morning hours (2–5 AM) are uniformly low.</p>
-<div id="4db78d7c" class="cell" data-execution_count="15">
+<div id="dd9fefe7" class="cell" data-execution_count="15">
 <div class="cell-output cell-output-display">
 <div>
 <figure class="figure">
@@ -2191,7 +2191,7 @@ vertical-align: -.125em;
 </ul>
 <p><strong>Plots 3 &amp; 4 — Crime Count and Crime Rate Choropleth Maps</strong></p>
 <p>Plot 3 maps raw crime counts, where the Loop and Near North Side dominate due to high commercial and transit activity, making spatial variation elsewhere difficult to discern. Plot 4 adjusts for population (crime rate per 100 residents), producing a more evenly distributed and informative picture that highlights elevated risk in South and West Side tracts that would otherwise appear moderate in absolute terms.</p>
-<div id="b154c838" class="cell" data-execution_count="17">
+<div id="ac3f0bc5" class="cell" data-execution_count="17">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
@@ -2202,7 +2202,7 @@ vertical-align: -.125em;
 </div>
 <p><strong>Plots 5, 6 &amp; 7 — Socioeconomic Choropleth Maps</strong></p>
 <p>These three maps display the spatial distribution of education rate, unemployment rate, and median income across Chicago census tracts. All three exhibit geographic patterns strikingly similar to the crime rate map (Plot 4), with socioeconomic disadvantage concentrated in the same South and West Side tracts that bear the highest crime burden,which motivates the correlation analysis in the Streamlit app.</p>
-<div id="1bc56195" class="cell" data-execution_count="18">
+<div id="a2590672" class="cell" data-execution_count="18">
 <div class="cell-output cell-output-display">
 <div class="quarto-figure quarto-figure-center">
 <figure class="figure">
@@ -2217,6 +2217,7 @@ vertical-align: -.125em;
 <p>The interactive dashboard is organized into two pages with a sidebar.</p>
 <p><strong>Page 1: Crime Distribution</strong> displays a choropleth map of crime rates per 100 residents and a bar chart of crime counts by category, filterable by year, month, hour, and crime type. The South and West Side tracts bear the highest crime rates, while the Loop dominates in absolute counts due to commercial activity.</p>
 <p><strong>Page 2: Socioeconomic Correlates</strong> presents scatter plots with OLS trendlines showing crime count and crime rate against a user-selected factor: education rate, unemployment rate, or median income. Tracts with greater socioeconomic disadvantage consistently show higher crime rates, corroborating the spatial patterns in Page 1.</p>
+<p>These findings suggest that public safety interventions and social investment programs would have the greatest impact if targeted at South and West Side tracts, particularly during summer months and evening hours, where both crime rates and socioeconomic disadvantage are most concentrated.</p>
 </section>
 </section>
 
