@@ -1,0 +1,830 @@
+---
+format:
+  html:
+    toc: false
+    embed-resources: true
+  pdf:
+    include-in-header:
+      text: |
+        \usepackage{fvextra}
+        \usepackage{float}
+        \usepackage{booktabs}
+        \DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines,commandchars=\\\{\}}
+execute:
+  echo: false
+  warning: false
+  message: false
+jupyter: python3
+---
+
+# Chicago Crime Patterns and Socioeconomic Correlates
+
+**Group Members**: Xinying Jiang, Henry Liu
+
+**Lecture Section**: Section 4
+
+**GitHub**: xinying0301, henryliu1125
+
+## Research Question
+
+This project aims to inform the targeting of public safety and social investment resources with asking two questions: (1) What are the temporal, spatial, and categorical patterns of crime across Chicago in 2024, and (2) to what extent are neighborhood crime rates associated with socioeconomic conditions (education attainment, unemployment, and median income)? 
+
+Data sources include the City of Chicago's crime incident dataset (filtered to 2024) and the 2024 American Community Survey 5-Year Estimates (ACS) for socioeconomic variables.
+
+## Approach and Coding
+
+The analysis was organized in four stages. First, \textbf{data cleaning}: the 31 original crime types were collapsed into four categories (Violent, Property, Regulatory, Other), and ACS tables were processed to extract 11-digit GEOID codes and compute derived rates.
+
+Second, \textbf{spatial joining}: tracts were clipped to the Chicago city boundary, and a GeoPandas `sjoin` with predicate `within` assigned each crime point to exactly one tract. Crime rate was computed as count divided by ACS population, scaled by per 100 residents.
+
+Third, \textbf{static visualization}: Produced two temporal heatmaps, two choropleth maps of crime count and rate and three socioeconomic choropleth maps. 
+
+Fourth, \textbf{Streamlit app}: Users can interactively explore crime patterns and their relationship to socioeconomic variables.
+
+**Weaknesses and difficulties encountered:**
+
+- \textbf{Temporal scope}: The crime dataset was filtered to 2024 only due to file size constraints, precluding time-series or trend analysis across years.
+- \textbf{Spatial join precision}: An initial spatial join using `intersects` without first clipping tracts to the Chicago city boundary inadvertently included partial Cook County tracts and water bodies such as Lake Michigan. This was resolved by first clipping all Illinois tracts to the Chicago city boundary shapefile, then using a `within` predicate to assign each crime point to exactly one tract.
+- \textbf{Correlation, not causation}: The socioeconomic analysis identifies associations between tract-level conditions and crime rates but cannot establish causal relationships.
+
+```{python}
+#| include: false
+from pathlib import Path
+import pandas as pd
+import geopandas as gpd
+import altair as alt
+import json
+
+import warnings
+warnings.filterwarnings('ignore')
+alt.renderers.enable("png")
+alt.data_transformers.disable_max_rows()
+
+# improve graph Resolution
+import tempfile
+from IPython.display import SVG, display, Image
+import vl_convert as vlc
+
+def display_altair_png(chart, scale=2):
+    png_bytes = vlc.vegalite_to_png(chart.to_dict(), scale=scale)
+
+    # Write to a temporary PNG file and display
+    with tempfile.NamedTemporaryFile(suffix=".png") as tmp:
+        tmp.write(png_bytes)
+        tmp.flush()
+        display(Image(filename=tmp.name))
+```
+```{python}
+#| include: false
+# Load data
+DATA_DIR = Path("../data")
+
+# Crime
+crime_raw = pd.read_csv(DATA_DIR / "Crimes_-_2001_to_Present_20260304.csv")
+print("Crime loaded:", crime_raw.shape)
+
+# Education
+edu_raw = pd.read_csv(DATA_DIR / "ACSDT5Y2024.B15003-Data.csv")
+print("Education loaded:", edu_raw.shape)
+
+# Unemployment rate
+unemp_raw = pd.read_csv(DATA_DIR / "ACSST5Y2024.S2301-Data.csv")
+print("Unemployment loaded:", unemp_raw.shape)
+
+# Income
+income_raw = pd.read_csv(DATA_DIR / "ACSDT5Y2024.B19013-Data.csv")
+print("Income loaded:", income_raw.shape)
+
+# Population
+pop_raw = pd.read_csv(DATA_DIR / "ACSDT5Y2024.B01003-Data.csv")
+print("Population loaded:", pop_raw.shape)
+pop_raw.head()
+
+# Tract shapefile
+tract_raw = gpd.read_file(DATA_DIR / "tl_2023_17_tract" / "tl_2023_17_tract.shp")
+print("Tract loaded:", tract_raw.shape)
+```
+```{python}
+#| include: false
+# Clean crime data
+crime = crime_raw[[
+    "Date",
+    "Primary Type",
+    "Year",
+    "Latitude",
+    "Longitude"
+]].copy()
+
+# Set 31 "Primary Type" to 4 types
+violent = {
+    "HOMICIDE",
+    "BATTERY",
+    "ASSAULT",
+    "ROBBERY",
+    "CRIMINAL SEXUAL ASSAULT",
+    "SEX OFFENSE",
+    "KIDNAPPING",
+    "STALKING",
+    "INTIMIDATION"
+}
+
+property_crime = {
+    "THEFT",
+    "BURGLARY",
+    "MOTOR VEHICLE THEFT",
+    "CRIMINAL DAMAGE",
+    "CRIMINAL TRESPASS",
+    "ARSON",
+    "DECEPTIVE PRACTICE"
+}
+
+regulatory = {
+    "NARCOTICS",
+    "OTHER NARCOTIC VIOLATION",
+    "LIQUOR LAW VIOLATION",
+    "WEAPONS VIOLATION",
+    "CONCEALED CARRY LICENSE VIOLATION",
+    "GAMBLING",
+    "PROSTITUTION",
+    "PUBLIC INDECENCY",
+    "OBSCENITY",
+    "HUMAN TRAFFICKING"
+}
+
+other = {
+    "OTHER OFFENSE",
+    "OFFENSE INVOLVING CHILDREN",
+    "INTERFERENCE WITH PUBLIC OFFICER",
+    "PUBLIC PEACE VIOLATION",
+    "NON-CRIMINAL"
+}
+
+# Function to classify crime
+def classify_crime(x):
+    if x in violent:
+        return "Violent"
+    elif x in property_crime:
+        return "Property"
+    elif x in regulatory:
+        return "Regulatory"
+    else:
+        return "Other"
+
+# Create new column and drop "Primary Type" column
+crime["crime_type"] = crime["Primary Type"].apply(classify_crime)
+
+crime = crime.drop(columns="Primary Type")
+
+print("Crime cleaned:", crime.shape)
+display(crime.head())
+```
+```{python}
+#| include: false
+# Clean education data
+edu = edu_raw.iloc[3:][[
+    "GEO_ID",
+    "B15003_001E",
+    "B15003_021E",
+    "B15003_022E",
+    "B15003_023E",
+    "B15003_024E"
+]].copy()
+
+# Extract tract_id
+edu["tract_id"] = edu["GEO_ID"].str[-11:]
+
+# Convert to numeric
+cols = [
+    "B15003_001E",
+    "B15003_021E",
+    "B15003_022E",
+    "B15003_023E",
+    "B15003_024E"
+]
+
+edu[cols] = edu[cols].apply(pd.to_numeric, errors="coerce")
+
+# Bachelor+ population
+edu["bachelor_plus"] = (
+    edu["B15003_021E"] +
+    edu["B15003_022E"] +
+    edu["B15003_023E"] +
+    edu["B15003_024E"]
+)
+
+# Bachelor+ rate
+edu["edu_rate"] = 100 * edu["bachelor_plus"] / edu["B15003_001E"]
+
+# Keep only needed columns
+edu = edu[["tract_id", "edu_rate"]]
+
+print("Education cleaned:", edu.shape)
+display(edu.head())
+```
+```{python}
+#| include: false
+# Clean unemployment data
+unemp = unemp_raw.iloc[3:][[
+    "GEO_ID",
+    "S2301_C04_001E"
+]].copy()
+
+# Extract tract id
+unemp["tract_id"] = unemp["GEO_ID"].str[-11:]
+
+# Convert to numeric
+unemp["S2301_C04_001E"] = pd.to_numeric(
+    unemp["S2301_C04_001E"],
+    errors="coerce"
+)
+
+# Rename column
+unemp = unemp.rename(
+    columns={"S2301_C04_001E": "unemployment_rate"}
+)
+
+# Keep final columns
+unemp = unemp[[
+    "tract_id",
+    "unemployment_rate"
+]]
+
+print("Unemployment cleaned:", unemp.shape)
+display(unemp.head())
+```
+```{python}
+#| include: false
+# Clean income data
+income = income_raw.iloc[3:][[
+    "GEO_ID",
+    "B19013_001E"
+]].copy()
+
+# Extract tract id
+income["tract_id"] = income["GEO_ID"].str[-11:]
+
+# Convert to numeric
+income["B19013_001E"] = pd.to_numeric(
+    income["B19013_001E"],
+    errors="coerce"
+)
+
+# Rename column
+income = income.rename(
+    columns={"B19013_001E": "median_income"}
+)
+
+# Keep final columns
+income = income[[
+    "tract_id",
+    "median_income"
+]]
+
+print("Income cleaned:", income.shape)
+display(income.head())
+```
+```{python}
+#| include: false
+# Clean population data
+pop = pop_raw.iloc[3:][[
+    "GEO_ID",
+    "B01003_001E"
+]].copy()
+
+# Extract tract id
+pop["tract_id"] = pop["GEO_ID"].str[-11:]
+
+# Convert to numeric
+pop["B01003_001E"] = pd.to_numeric(
+    pop["B01003_001E"],
+    errors="coerce"
+)
+
+# Rename column
+pop = pop.rename(
+    columns={"B01003_001E": "population"}
+)
+
+# Keep final columns
+pop = pop[[
+    "tract_id",
+    "population"
+]]
+
+print("Population cleaned:", pop.shape)
+display(pop.head())
+```
+```{python}
+#| include: false
+# Tracts Geodata: keep only Chicago tract IDs 
+tracts = gpd.read_file(DATA_DIR / "tl_2023_17_tract" / "tl_2023_17_tract.shp")
+chicago = gpd.read_file(DATA_DIR / "Boundaries - City_20260303" / "geo_export_06d21f1c-6fda-4eae-9de6-a54e6cd59005.shp")
+
+# Align CRS
+chicago = chicago.to_crs(tracts.crs)
+
+# Keep tracts that intersect Chicago boundary (without cutting geometry)
+tracts_chi = gpd.sjoin(
+    tracts,
+    chicago[["geometry"]],
+    how="inner",
+    predicate="intersects"
+).drop(columns=["index_right"])
+
+# Clip tracts to Chicago boundary
+tracts_chi = gpd.clip(tracts_chi, chicago)
+
+# Ensure tract id format
+tracts_chi["GEOID"] = tracts_chi["GEOID"].astype(str).str.zfill(11)
+
+# Chicago tract id set
+chi_tract_ids = set(tracts_chi["GEOID"])
+print(f"Total tracts in Chicago: {len(chi_tract_ids)}")
+```
+```{python}
+#| include: false
+# Crime Geodata: add tract_id column
+crime_geo = crime.dropna(subset=["Latitude", "Longitude"]).copy()
+
+crime_gdf = gpd.GeoDataFrame(
+    crime_geo,
+    geometry=gpd.points_from_xy(crime_geo["Longitude"], crime_geo["Latitude"]),
+    crs="EPSG:4326"
+)
+
+tracts_chi_4326 = tracts_chi.to_crs("EPSG:4326")
+
+crime_tract = gpd.sjoin(
+    crime_gdf,
+    tracts_chi_4326[["GEOID", "geometry"]],
+    how="inner",
+    predicate="within"
+).rename(columns={"GEOID": "tract_id"})
+
+crime_tract["tract_id"] = crime_tract["tract_id"].astype(str).str.zfill(11)
+
+print("Crime in Chicago: ", crime_tract.shape)
+display(crime_tract.head())
+```
+```{python}
+#| include: false
+# Education Geodata: keep only Chicago tracts
+edu_gdf = tracts_chi.merge(
+    edu,
+    left_on="GEOID",
+    right_on="tract_id",
+    how="left"
+)
+
+edu_gdf.head()
+```
+```{python}
+#| include: false
+# Unemployment Geodata: keep only Chicago tracts
+unemp_gdf = tracts_chi.merge(
+    unemp,
+    left_on="GEOID",
+    right_on="tract_id",
+    how="left"
+)
+
+unemp_gdf.head()
+```
+```{python}
+#| include: false
+# Income Geodata: keep only Chicago tracts
+income_gdf = tracts_chi.merge(
+    income,
+    left_on="GEOID",
+    right_on="tract_id",
+    how="left"
+)
+
+income_gdf.head()
+```
+```{python}
+#| include: false
+# Population Geodata: keep only Chicago tracts
+pop_gdf = tracts_chi.merge(
+    pop,
+    left_on="GEOID",
+    right_on="tract_id",
+    how="left"
+)
+
+pop_gdf.head()
+```
+```{python}
+#| include: false
+# Merge Crime and ACS variables into tract GeoDataFrame
+crime_by_tract = (
+    crime_tract
+    .groupby("tract_id", as_index=False)
+    .size()
+    .rename(columns={"size": "crime_count"})
+)
+
+# Merge crime + ACS into Chicago tracts GeoDataFrame
+tracts_analysis = (
+    tracts_chi
+    .merge(pop, left_on="GEOID", right_on="tract_id", how="left")
+    .drop(columns=["tract_id"])
+    .merge(crime_by_tract, left_on="GEOID", right_on="tract_id", how="left")
+    .drop(columns=["tract_id"])
+    .merge(edu, left_on="GEOID", right_on="tract_id", how="left").drop(columns=["tract_id"])
+    .merge(unemp, left_on="GEOID", right_on="tract_id", how="left").drop(columns=["tract_id"])
+    .merge(income, left_on="GEOID", right_on="tract_id", how="left").drop(columns=["tract_id"])
+)
+
+# Fill tracts with no crimes + compute rate (per 1000 residents)
+tracts_analysis["crime_count"] = tracts_analysis["crime_count"].fillna(0).astype(int)
+tracts_analysis["crime_rate"] = (tracts_analysis["crime_count"] / tracts_analysis["population"]) * 100
+
+tracts_analysis.head()
+```
+
+**Plots 1 & 2 — Crime Count by Month/Date and Month/Hour**
+
+The heatmaps reveal clear temporal structures. Plot 1 shows higher crime in summer months and on the 1st of each month. Plot 2 shows an evening peak (6–9 PM), especially in summer. Early-morning hours (2–5 AM) are uniformly low.
+
+```{python}
+#| echo: false
+# Static plot 1: Crime count by Month and Date
+crime_time = crime_tract.copy()
+crime_time["Date"] = pd.to_datetime(crime_time["Date"], errors="coerce")
+
+crime_time["month"] = crime_time["Date"].dt.month
+crime_time["date"] = crime_time["Date"].dt.day
+
+# Aggregate crime count
+crime_calendar = (
+    crime_time
+    .groupby(["month", "date"], as_index=False)
+    .size()
+    .rename(columns={"size": "crime_count"})
+)
+
+# Month labels
+month_order = [
+    "Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"
+]
+
+crime_calendar["month_name"] = crime_calendar["month"].apply(lambda x: month_order[x-1])
+
+# Heatmap
+month_date_heatmap = (
+    alt.Chart(crime_calendar)
+    .mark_rect()
+    .encode(
+        x=alt.X(
+            "month_name:N",
+            title="Month",
+            sort=month_order
+        ),
+        y=alt.Y(
+            "date:O",
+            title="Date"
+        ),
+        color=alt.Color(
+            "crime_count:Q",
+            title="Crime Count",
+            scale=alt.Scale(scheme="redyellowblue", reverse=True)
+        ),
+        tooltip=[
+            alt.Tooltip("month_name:N", title="Month"),
+            alt.Tooltip("date:O", title="Date"),
+            alt.Tooltip("crime_count:Q", title="Crime Count")
+        ]
+    )
+    .properties(
+        width=80,
+        height=130,
+        title="Crime Count by Month and Date"
+    )
+)
+
+# Static plot 2: Crime count by Month and Hour
+crime_time["hour"] = crime_time["Date"].dt.hour
+
+# Aggregate counts
+crime_month_hour = (
+    crime_time
+    .groupby(["month", "hour"], as_index=False)
+    .size()
+    .rename(columns={"size": "crime_count"})
+)
+
+# Month labels
+crime_month_hour["month_name"] = crime_month_hour["month"].apply(lambda x: month_order[x-1])
+
+# Heatmap
+month_hour_heatmap = (
+    alt.Chart(crime_month_hour)
+    .mark_rect()
+    .encode(
+        x=alt.X("month_name:N", title="Month", sort=month_order),
+        y=alt.Y("hour:O", title="Hour of Day"),
+        color=alt.Color(
+            "crime_count:Q",
+            title="Crime Count",
+            scale=alt.Scale(scheme="redyellowblue", reverse=True)
+        ),
+        tooltip=[
+            alt.Tooltip("month_name:N", title="Month"),
+            alt.Tooltip("hour:O", title="Hour"),
+            alt.Tooltip("crime_count:Q", title="Crime Count")
+        ]
+    )
+    .properties(
+        width=80,
+        height=130,
+        title="Crime Count by Month and Hour"
+    )
+)
+
+combined = alt.hconcat(
+    month_date_heatmap,
+    month_hour_heatmap
+).resolve_scale(
+    color="independent"
+).configure_axis(
+    labelFontSize=5,
+    titleFontSize=6
+).configure_legend(
+    labelFontSize=5,
+    titleFontSize=6
+).configure_title(
+    fontSize=7
+)
+
+display_altair_png(combined, scale=2)
+```
+Following feedback from the presentation, we investigated several apparent anomalies:
+
+- \textbf{Elevated counts on the 1st of each month and at 12:00 AM / 12:00 PM}: Minute- and second-level analysis confirms these are CPD default placeholder values, with exact 00:00:00 timestamps account for 9.70% of records on the 1st versus 3.31% on other dates.
+
+- \textbf{Low counts on January 14 and November 28}: Record counts are consistent between raw and cleaned data, confirming the reductions reflect genuine behavioral changes on federal holidays (MLK Day and Thanksgiving).
+
+- \textbf{Low count on May 14}: Of 728 raw records, only 114 remain after cleaning, as 84% are missing geographic coordinates compared to a citywide average of 99.4%. May 15 is the second-worst date by the same metric, suggesting a CPD system outage rather than a true crime drop.
+```{python}
+#| include: false
+#| fig-align: center
+
+# Investigate anormalies shown in the plots
+# Create a check dataframe
+crime_raw_check = crime_raw.copy()
+crime_raw_check["Date"] = pd.to_datetime(crime_raw_check["Date"], errors="coerce")
+crime_raw_check["month"] = crime_raw_check["Date"].dt.month
+crime_raw_check["date"] = crime_raw_check["Date"].dt.day
+crime_raw_check["hour"] = crime_raw_check["Date"].dt.hour
+crime_raw_check["minute"] = crime_raw_check["Date"].dt.minute
+crime_raw_check["second"] = crime_raw_check["Date"].dt.second
+crime_raw_check["has_coords"] = (
+    crime_raw_check["Latitude"].notna() & 
+    crime_raw_check["Longitude"].notna()
+)
+
+# 1. Date Anomaly Checks
+
+# 1.1 Jan 14 and Nov 28
+for month, day in [(1, 14), (11, 28)]:
+    raw = crime_raw_check[
+        (crime_raw_check["month"] == month) &
+        (crime_raw_check["date"] == day)
+    ]
+    surrounding = crime_raw_check[
+        (crime_raw_check["month"] == month) &
+        (crime_raw_check["date"].isin(range(day-3, day+4))) &
+        (crime_raw_check["date"] != day)
+    ]
+    avg_surrounding = len(surrounding) / 6
+    print(f"\n {month}/{day}")
+    print(f"Total records on this day: {len(raw)}")
+    print(f"Avg records on surrounding 3 days: {avg_surrounding:.0f}")
+    print(f"Coordinate completeness rate: {raw['has_coords'].mean():.2%}")
+
+# 1.2 May 14
+print("May 14")
+may14_raw = crime_raw_check[
+    (crime_raw_check["month"] == 5) &
+    (crime_raw_check["date"] == 14)
+]
+print(f"\n Total records in raw data: {len(may14_raw)}")
+print(f"Coordinate completeness rate: {may14_raw['has_coords'].mean():.2%}")
+print(f"Citywide avg completeness rate: {crime_raw_check['has_coords'].mean():.2%}")
+
+# Bottom 5 dates by coordinate completeness
+all_completeness = (
+    crime_raw_check
+    .groupby(["month", "date"])["has_coords"]
+    .mean()
+    .reset_index()
+    .rename(columns={"has_coords": "completeness_rate"})
+    .sort_values("completeness_rate")
+)
+print(f"\n Bottom 5 dates by coordinate completeness: \n {all_completeness.head().to_string(index=False)}")
+
+# Crime type distribution of missing-coordinate records (ruling out duplicates)
+may14_missing = may14_raw[~may14_raw["has_coords"]]
+print(f"\n  Records missing coordinates: {len(may14_missing)}")
+print(f"Crime type distribution (missing coords): \n {may14_missing["Primary Type"].value_counts().head(10).to_string()}")
+
+# 1.3 1st of Each Month
+print("\n 1st of Each Month")
+day1 = crime_raw_check[crime_raw_check["date"] == 1]
+other_days = crime_raw_check[crime_raw_check["date"] != 1]
+
+midnight = lambda df: ((df["hour"]==0) & (df["minute"]==0) & (df["second"]==0)).mean()
+print(f"Share of 00:00:00 on the 1st: {midnight(day1):.2%}")
+print(f"Share of 00:00:00 on other days: {midnight(other_days):.2%}")
+print(f"Share of hour=0 on the 1st: {(day1['hour']==0).mean():.2%}")
+print(f"Share of hour=0 on other days: {(other_days['hour']==0).mean():.2%}")
+
+# 2. Time Anomaly Checks
+
+# 2.1 Midnight & Noon Spike
+print("\n Midnight & Noon Spike")
+h0_h12 = crime_raw_check[crime_raw_check["hour"].isin([0, 12])]
+other_hours = crime_raw_check[~crime_raw_check["hour"].isin([0, 12])]
+
+exact_zero = lambda df: ((df["minute"]==0) & (df["second"]==0)).mean()
+print(f"Share of xx:00:00 at hour 0 & 12: {exact_zero(h0_h12):.2%}")
+print(f"Share of xx:00:00 at other hours: {exact_zero(other_hours):.2%}")
+
+# Minute distribution comparison
+print("\n  Minute distribution at hour 0 & 12:")
+print(h0_h12["minute"].value_counts().sort_index().head(5).to_string())
+print("\n  Minute distribution at other hours (first 5 minutes):")
+print(other_hours["minute"].value_counts().sort_index().head(5).to_string())
+```
+
+**Plots 3 & 4 — Crime Count and Crime Rate Choropleth Maps**
+
+Plot 3 maps raw crime counts, where the Loop and Near North Side dominate due to high commercial and transit activity, making spatial variation elsewhere difficult to discern. Plot 4 adjusts for population (crime rate per 100 residents), producing a more evenly distributed and informative picture that highlights elevated risk in South and West Side tracts that would otherwise appear moderate in absolute terms.
+
+```{python}
+#| fig-align: center
+#| echo: false
+
+# Static plot 3: Crime Count Choropleth Map
+tracts_plot = tracts_analysis.to_crs("EPSG:4326").copy()
+geojson_dict = json.loads(tracts_plot.to_json())
+
+crime_count_map = (
+    alt.Chart(
+        alt.InlineData(
+            values=geojson_dict,
+            format=alt.DataFormat(type="json", property="features")
+        )
+    )
+    .mark_geoshape(stroke="white", strokeWidth=0.2)
+    .encode(
+        color=alt.Color(
+            "properties.crime_count:Q",
+            title="Crime Count",
+            scale=alt.Scale(scheme="orangered")
+        ),
+        tooltip=[
+            alt.Tooltip("properties.GEOID:N", title="Tract"),
+            alt.Tooltip("properties.crime_count:Q", title="Crime count"),
+        ],
+    )
+    .properties(
+        width=130,
+        height=130,
+        title="Chicago Crime Count by Census Tract (2024)"
+    )
+    .project(type="mercator")
+)
+
+# Static plot 4: Crime Rate Choropleth Map
+tracts_plot = tracts_analysis.to_crs("EPSG:4326").copy()
+geojson_dict = json.loads(tracts_plot.to_json())
+
+crime_rate_map = (
+    alt.Chart(
+        alt.InlineData(
+            values=geojson_dict,
+            format=alt.DataFormat(type="json", property="features")
+        )
+    )
+    .mark_geoshape(stroke="white", strokeWidth=0.2)
+    .encode(
+        color=alt.Color(
+            "properties.crime_rate:Q",
+            title="Crime Rate",
+            scale=alt.Scale(scheme="orangered")
+        ),
+        tooltip=[
+            alt.Tooltip("properties.GEOID:N", title="Tract"),
+            alt.Tooltip("properties.crime_count:Q", title="Crime count"),
+            alt.Tooltip("properties.population:Q", title="Population"),
+            alt.Tooltip("properties.crime_rate:Q", title="Crime rate", format=".2f"),
+        ],
+    )
+    .properties(
+        width=130,
+        height=130,
+        title="Chicago Crime Rate by Census Tract (2024)"
+    )
+    .project(type="mercator")
+)
+
+combined = alt.hconcat(
+    crime_count_map, crime_rate_map
+).resolve_scale(
+    color="independent"
+)
+
+display_altair_png(combined, scale=2)
+#display_altair_png(crime_count_map | crime_rate_map, scale=2)
+```
+
+**Plots 5, 6 & 7 — Socioeconomic Choropleth Maps**
+
+These three maps display the spatial distribution of education rate, unemployment rate, and median income across Chicago census tracts. All three exhibit geographic patterns strikingly similar to the crime rate map (Plot 4), with socioeconomic disadvantage concentrated in the same South and West Side tracts that bear the highest crime burden,which motivates the correlation analysis in the Streamlit app.
+
+```{python}
+#| fig-align: center
+# Set base map
+tracts_plot = tracts_analysis.to_crs("EPSG:4326").copy()
+geojson_dict = json.loads(tracts_plot.to_json())
+
+base = (
+    alt.Chart(
+        alt.InlineData(
+            values=geojson_dict,
+            format=alt.DataFormat(type="json", property="features")
+        )
+    )
+    .mark_geoshape(stroke="white", strokeWidth=0.2)
+    .project(type="mercator")
+    .properties(width=120, height=130)
+)
+
+# Education choropleth
+edu_map = base.encode(
+    color=alt.Color(
+        "properties.edu_rate:Q",
+        title="Education (%)",
+        scale=alt.Scale(scheme="greens", type="quantile")
+    ),
+    tooltip=[
+        alt.Tooltip("properties.GEOID:N", title="Tract"),
+        alt.Tooltip("properties.edu_rate:Q", title="Education (%)", format=".1f")
+    ]
+).properties(title="Education Rate by Tract")
+
+# Unemployment choropleth
+unemp_map = base.encode(
+    color=alt.Color(
+        "properties.unemployment_rate:Q",
+        title="Unemployment (%)",
+        scale=alt.Scale(scheme="blues", type="quantile")
+    ),
+    tooltip=[
+        alt.Tooltip("properties.GEOID:N", title="Tract"),
+        alt.Tooltip("properties.unemployment_rate:Q", title="Unemployment (%)", format=".1f")
+    ]
+).properties(title="Unemployment Rate by Tract")
+
+# Income choropleth
+income_map = base.encode(
+    color=alt.Color(
+        "properties.median_income:Q",
+        title="Median Income (USD)",
+        scale=alt.Scale(scheme="purples", type="quantile")
+    ),
+    tooltip=[
+        alt.Tooltip("properties.GEOID:N", title="Tract"),
+        alt.Tooltip("properties.median_income:Q", title="Median Income", format=",.0f")
+    ]
+).properties(title="Median Income by Tract")
+
+combined = alt.hconcat(
+    edu_map, unemp_map, income_map
+).resolve_scale(
+    color="independent"
+).configure_axis(
+    labelFontSize=7,
+    titleFontSize=8
+).configure_legend(
+    labelFontSize=7,
+    titleFontSize=8,
+    gradientLength=60,
+    gradientThickness=8
+).configure_title(
+    fontSize=9
+)
+
+display_altair_png(combined, scale=2)
+# display_altair_png(edu_map | unemp_map | income_map, scale=2)
+```
+
+## Streamlit App
+
+The interactive dashboard is organized into two pages with a sidebar.
+
+**Page 1: Crime Distribution** displays a choropleth map of crime rates per 100 residents and a bar chart of crime counts by category, filterable by year, month, hour, and crime type. The South and West Side tracts bear the highest crime rates, while the Loop dominates in absolute counts due to commercial activity.
+
+**Page 2: Socioeconomic Correlates** presents scatter plots with OLS trendlines showing crime count and crime rate against a user-selected factor: education rate, unemployment rate, or median income. Tracts with greater socioeconomic disadvantage consistently show higher crime rates, corroborating the spatial patterns in Page 1.
