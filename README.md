@@ -13,9 +13,19 @@ pip install -r requirements.txt
 ```
 
 ## Data Sources
-- **Crime data**: Downloaded from the [Chicago Data Portal](https://data.cityofchicago.org/Public-Safety/Crimes-2001-to-Present/ijzp-q8t2), with a filter Year=2024 in the dashboard.
+- **Crime data**: Downloaded from the [Chicago Data Portal](https://data.cityofchicago.org/Public-Safety/Crimes-2001-to-Present/ijzp-q8t2), with a date filter applied on the portal (Date: 01/01/2024 – 12/31/2024) prior to download, yielding a 2024-only subset stored at data/Crimes_-_2001_to_Present_20260304.csv.
 - **ACS data**: Downloaded from [Census ACS 5-Year Estimates 2024](https://data.census.gov) (tables B15003, S2301, B19013, B01003).
 - **Shapefiles**: Illinois census tracts from [Census TIGER/Line 2023](https://www.census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html) and Chicago city boundary from the [Chicago Data Portal](https://data.cityofchicago.org/Facilities-Geographic-Boundaries/Boundaries-City-Map/ewy2-6yfk).
+
+## Data Processing
+
+All processing is performed directly in `code/app.py` and `code/final project.qmd` with no separate preprocessing script.
+
+1. Crime records are classified into four categories: Violent, Property, Regulatory, and Other.
+2. ACS tables are processed to extract 11-digit GEOID tract codes and compute derived rates (education rate, unemployment rate, median income).
+3. Illinois census tracts are clipped to the Chicago city boundary shapefile to exclude Cook County tracts outside the city.
+4. Crime points are spatially joined to census tracts using a `within` predicate via GeoPandas `sjoin`.
+5. Crime rate is computed as crime count per tract divided by ACS population, scaled per 100 residents.
 
 ## Project Structure
 ```
